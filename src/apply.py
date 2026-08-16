@@ -31,24 +31,10 @@ class JobApplier:
             cookies = json.load(fh)
         return cookies if isinstance(cookies, list) and len(cookies) > 0 else None
 
-    def get_recent_jobs(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Filter jobs posted within max_days_old."""
-        recent = []
-        for job in jobs:
-            posted = job.get("posted_date", "")
-            if is_recent_job(posted, self.max_days_old):
-                recent.append(job)
-                print(f"  Recent: {job['title'][:50]} | Posted: {posted}")
-            else:
-                print(f"  Skip (old): {job['title'][:50]} | Posted: {posted}")
-        return recent
-
     def extract_job_description(self, page: Any) -> str:
         """Extract full job description from job detail page."""
-        # Wait for job description to load
         page.wait_for_timeout(2000)
         
-        # More specific selectors for Naukri job description
         selectors = [
             "[class*='jd-container']",
             "[class*='job-desc']",
@@ -66,10 +52,9 @@ class JobApplier:
             elem = page.query_selector(sel)
             if elem:
                 text = elem.inner_text().strip()
-                if len(text) > 100:  # Ensure we got substantial content
+                if len(text) > 100:
                     return text
         
-        # Fallback: try to get text from the main job detail container
         main_selectors = [
             ".job-detail",
             ".job-detail-container",
@@ -108,22 +93,20 @@ class JobApplier:
                     continue
         return False
 
-    def apply_to_jobs(self, jobs: list[dict[str, Any]], max_jobs: int = 10) -> dict:
-        """Apply to matching recent jobs."""
-        cookies = self.load_session()
-        if not cookies:
-            raise RuntimeError("No valid session. Run login.py first.")
+    def get_posted_date_from_card(self, card: Any) -> str:
+        """Extract posted date from job card on search results page."""
+        posted_elem = card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
+        if posted_elem:
+            return posted_elem.inner_text().strip()
+        return ""
 
-        recent_jobs = self.get_recent_jobs(jobs)
-        print(f"\nFound {len(recent_jobs)} recent jobs (within {self.max_days_old} days)")
-
-        # Pre-filter: only consider DevOps/Cloud/SRE relevant titles
+    def is_relevant_title(self, title: str) -> bool:
+        """Check if job title is relevant (DevOps/Cloud/SRE)."""
         relevant_keywords = ["devops", "cloud", "sre", "site reliability", "aws", "azure", "gcp", 
                             "kubernetes", "k8s", "docker", "terraform", "ansible", "jenkins",
                             "ci/cd", "infrastructure", "platform", "reliability", "observability",
                             "prometheus", "grafana", "monitoring", "logging", "automation"]
         
-        # Exclude patterns (developer roles that aren't DevOps)
         exclude_patterns = [
             "java developer", "python developer", "full stack", ".net", "dot net",
             "react", "node js", "nodejs", "angular", "vue", "frontend", "backend",
@@ -131,118 +114,237 @@ class JobApplier:
             "data engineer", "ml engineer", "ai engineer", "mlops", "genai", "llm",
             "network engineer", "security engineer", "support engineer", "qa engineer",
             "test engineer", "quality assurance", "php", "laravel", "wordpress",
+            "java back end", "java/azure", "java +azure", "springboot", "microservices",
+            "python programmer", "python software developer", "python ai",
+            "dot net developer", ".net developer", "full stack .net",
+            "frappe", "sdet", "playwright", "sap cpi", "inbound sales",
+            "business development", "chocolate maker", "walk-in", "ltts",
+            "intermediate data science", "software engineer (support)",
         ]
         
-        # Deduplicate by URL
-        seen_urls = set()
-        filtered_jobs = []
-        for job in recent_jobs:
-            url = job.get('url', '')
-            if url in seen_urls:
-                continue
-            seen_urls.add(url)
-            
-            title_lower = job['title'].lower()
-            
-            # Check exclude patterns first
-            if any(ex in title_lower for ex in exclude_patterns):
-                print(f"  Skip (excluded): {job['title'][:60]}")
-                continue
-            
-            # Check relevant keywords
-            if any(kw in title_lower for kw in relevant_keywords):
-                filtered_jobs.append(job)
-            else:
-                print(f"  Skip (irrelevant title): {job['title'][:60]}")
+        title_lower = title.lower()
         
-        print(f"After title filter: {len(filtered_jobs)} relevant jobs")
+        if any(ex in title_lower for ex in exclude_patterns):
+            return False
         
-        # Limit for testing
-        filtered_jobs = filtered_jobs[:max_jobs]
-        print(f"Processing first {len(filtered_jobs)} jobs...")
+        if any(kw in title_lower for kw in relevant_keywords):
+            return True
+        
+        return False
 
+    def process_role(self, page: Any, keyword: str, max_jobs: int) -> dict:
+        """Process a single role: search, filter, check each job, apply if match."""
+        base_url = f"https://www.naukri.com/{keyword.lower().replace(' ', '-').replace('&', '')}-jobs"
+        search_url = f"{base_url}?experience=3"
+        print(f"\n{'='*60}")
+        print(f"Processing role: {keyword}")
+        print(f"URL: {search_url}")
+        print(f"{'='*60}")
+        
         applied = []
         skipped = []
         errors = []
+        processed = 0
+        card_index = 0
+        
+        while processed < max_jobs:
+            # Reload to avoid cache and get fresh cards
+            page.goto(search_url, wait_until="domcontentloaded", timeout=90000)
+            page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=30000)
+            
+            # Sort by date (only on first iteration)
+            if card_index == 0:
+                self.sort_by_date(page)
+            
+            # Get fresh job cards
+            cards = page.query_selector_all("[data-job-id], .jobTuple, .job-card")
+            print(f"Found {len(cards)} job cards")
+            
+            if card_index >= len(cards):
+                print("No more cards to process")
+                break
+            
+            card = cards[card_index]
+            
+            try:
+                # Get title and posted date from card
+                title_elem = card.query_selector("a.title, a[class*='title'], h2 a, h3 a, .job-title a")
+                link_elem = card.query_selector("a[href*='job-'], a[href*='/job/'], a.title")
+                
+                if not title_elem or not link_elem:
+                    card_index += 1
+                    continue
+                
+                title = title_elem.inner_text().strip()
+                url = link_elem.get_attribute("href")
+                posted = self.get_posted_date_from_card(card)
+                
+                # Check if recent
+                if not is_recent_job(posted, self.max_days_old):
+                    print(f"  [{card_index+1}] Skip (old): {title[:50]} | Posted: {posted}")
+                    card_index += 1
+                    continue
+                
+                # Check if relevant title
+                if not self.is_relevant_title(title):
+                    print(f"  [{card_index+1}] Skip (irrelevant): {title[:50]} | Posted: {posted}")
+                    card_index += 1
+                    continue
+                
+                print(f"\n  [{card_index+1}] Checking: {title[:60]}")
+                print(f"      Posted: {posted}")
+                print(f"      URL: {url}")
+                
+                # Click job to open detail page
+                try:
+                    link_elem.click()
+                    page.wait_for_load_state("domcontentloaded", timeout=30000)
+                    page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
+                except Exception as e:
+                    print(f"      ✗ Failed to open job: {e}")
+                    errors.append({"title": title, "url": url, "error": str(e)})
+                    # Reload search page
+                    card_index += 1
+                    continue
+                
+                # Extract JD and check skills
+                try:
+                    jd_text = self.extract_job_description(page)
+                    jd_text = jd_text[:5000]
+                    
+                    job_skills = extract_skills_from_text(jd_text)
+                    should, match_pct, matched, missing = should_apply(
+                        self.resume.skills, jd_text, self.match_threshold
+                    )
+                    
+                    print(f"      Skills in JD: {job_skills[:10]}")
+                    print(f"      Match: {match_pct:.1f}% | Matched: {matched} | Missing: {missing[:5]}")
+                    
+                    if should:
+                        print(f"      ✓ Match > {self.match_threshold}%, applying...")
+                        if self.click_apply(page):
+                            page.wait_for_timeout(3000)
+                            applied.append({
+                                "title": title, 
+                                "url": url, 
+                                "match_pct": match_pct,
+                                "posted": posted
+                            })
+                            print(f"      ✓ Applied successfully")
+                        else:
+                            errors.append({
+                                "title": title, 
+                                "url": url, 
+                                "error": "Apply button not found"
+                            })
+                            print(f"      ✗ Apply button not found")
+                    else:
+                        skipped.append({
+                            "title": title, 
+                            "url": url, 
+                            "match_pct": match_pct,
+                            "missing": missing,
+                            "posted": posted
+                        })
+                        print(f"      ✗ Match < {self.match_threshold}%, skipping")
+                    
+                    processed += 1
+                    
+                except Exception as e:
+                    print(f"      ✗ Error processing JD: {e}")
+                    errors.append({"title": title, "url": url, "error": str(e)})
+                
+                # Move to next card (will reload page)
+                card_index += 1
+                
+            except Exception as e:
+                print(f"  ✗ Error with card {card_index}: {e}")
+                card_index += 1
+                continue
+        
+        return {"applied": applied, "skipped": skipped, "errors": errors}
 
+    def sort_by_date(self, page: Any) -> None:
+        """Sort search results by date."""
+        try:
+            page.wait_for_selector("#filter-sort", timeout=20000)
+            sort_btn = page.query_selector("#filter-sort")
+            if sort_btn and sort_btn.is_visible():
+                sort_btn.click()
+                page.wait_for_timeout(2000)
+                date_option = page.query_selector("[data-filter-id='sort'] a[data-id='filter-sort-f']")
+                if date_option and date_option.is_visible():
+                    date_option.click()
+                    page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=20000)
+                    print("  Sorted by date")
+                else:
+                    print("  Date option not found")
+            else:
+                print("  Sort button not found")
+        except Exception as e:
+            print(f"  Sort by date failed: {e}")
+
+    def run(self, max_jobs_per_role: int = 5) -> dict:
+        """Run the full pipeline: process each role sequentially."""
+        cookies = self.load_session()
+        if not cookies:
+            raise RuntimeError("No valid session. Run login.py first.")
+
+        keywords = self.profile.get("strict_roles", [])
+        
+        all_applied = []
+        all_skipped = []
+        all_errors = []
+        
         with sync_playwright() as p:
             Stealth().use_sync(p)
             browser = p.chromium.launch(headless=False)
             context = browser.new_context()
             context.add_cookies(cookies)
-
-            for job in filtered_jobs:
-                page = context.new_page()
-                try:
-                    print(f"\nProcessing: {job['title'][:60]} at {job['company']}")
-                    page.goto(job["url"], wait_until="domcontentloaded", timeout=90000)
-                    # Wait for job description container
-                    page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
-
-                    jd_text = self.extract_job_description(page)
+            page = context.new_page()
+            
+            try:
+                for keyword in keywords:
+                    result = self.process_role(page, keyword, max_jobs_per_role)
+                    all_applied.extend(result["applied"])
+                    all_skipped.extend(result["skipped"])
+                    all_errors.extend(result["errors"])
                     
-                    # Only use first 5000 chars to avoid noise
-                    jd_text = jd_text[:5000]
+                    print(f"\nRole '{keyword}' complete: Applied={len(result['applied'])}, Skipped={len(result['skipped'])}, Errors={len(result['errors'])}")
                     
-                    job_skills = extract_skills_from_text(jd_text)
+                    # Small delay between roles
+                    page.wait_for_timeout(2000)
                     
-                    should, match_pct, matched, missing = should_apply(
-                        self.resume.skills, jd_text, self.match_threshold
-                    )
-                    
-                    print(f"  Skills found in JD: {job_skills[:15]}")
-                    print(f"  Resume skills: {self.resume.skills[:15]}")
-                    print(f"  Match: {match_pct:.1f}% | Matched: {matched} | Missing: {missing[:10]}")
-
-                    if should:
-                        print(f"  ✓ Match > {self.match_threshold}%, applying...")
-                        if self.click_apply(page):
-                            page.wait_for_timeout(3000)
-                            applied.append({**job, "match_pct": match_pct})
-                            print(f"  ✓ Applied successfully")
-                        else:
-                            errors.append({**job, "error": "Apply button not found"})
-                            print(f"  ✗ Apply button not found")
-                    else:
-                        skipped.append({**job, "match_pct": match_pct, "missing": missing})
-                        print(f"  ✗ Match < {self.match_threshold}%, skipping")
-
-                except Exception as e:
-                    errors.append({**job, "error": str(e)})
-                    print(f"  ✗ Error: {e}")
-                finally:
-                    page.close()
-
-            browser.close()
-
+            finally:
+                browser.close()
+        
         return {
-            "applied": applied,
-            "skipped": skipped,
-            "errors": errors,
+            "applied": all_applied,
+            "skipped": all_skipped,
+            "errors": all_errors,
         }
 
 
 def main():
     from src.search import JobSearch
     
-    search = JobSearch()
-    jobs = search.search_jobs()
-    
     applier = JobApplier()
-    result = applier.apply_to_jobs(jobs)
+    result = applier.run(max_jobs_per_role=5)
     
-    print("\n=== SUMMARY ===")
+    print("\n" + "=" * 60)
+    print("FINAL SUMMARY")
+    print("=" * 60)
     print(f"Applied: {len(result['applied'])}")
     for a in result['applied']:
-        print(f"  - {a['title'][:50]} ({a['match_pct']:.1f}%)")
+        print(f"  ✓ {a['title'][:60]} ({a['match_pct']:.1f}%) | Posted: {a.get('posted', 'Unknown')}")
     
     print(f"\nSkipped (low match): {len(result['skipped'])}")
-    for s in result['skipped']:
-        print(f"  - {s['title'][:50]} ({s['match_pct']:.1f}%)")
+    for s in result['skipped'][:10]:
+        print(f"  ✗ {s['title'][:60]} ({s['match_pct']:.1f}%) | Posted: {s.get('posted', 'Unknown')}")
     
     print(f"\nErrors: {len(result['errors'])}")
     for e in result['errors']:
-        print(f"  - {e.get('title', 'Unknown')[:50]}: {e.get('error', 'Unknown')}")
+        print(f"  ! {e.get('title', 'Unknown')[:60]}: {e.get('error', 'Unknown')}")
 
 
 if __name__ == "__main__":

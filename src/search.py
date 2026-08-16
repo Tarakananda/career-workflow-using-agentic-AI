@@ -64,15 +64,16 @@ class JobSearch:
 
     def _sort_by_date(self, page: Any) -> None:
         try:
-            page.wait_for_selector("#filter-sort", timeout=15000)
+            page.wait_for_selector("#filter-sort", timeout=20000)
             sort_btn = page.query_selector("#filter-sort")
             if sort_btn and sort_btn.is_visible():
                 sort_btn.click()
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(2000)
                 date_option = page.query_selector("[data-filter-id='sort'] a[data-id='filter-sort-f']")
                 if date_option and date_option.is_visible():
                     date_option.click()
-                    page.wait_for_load_state("networkidle", timeout=10000)
+                    # Wait for results to reload
+                    page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=20000)
                     print("  Sorted by date")
                 else:
                     print("  Date option not found")
@@ -82,6 +83,8 @@ class JobSearch:
             print(f"  Sort by date failed: {e}")
 
     def _apply_filters(self, page: Any, salary_min: int, salary_max: int, job_types: list[str]) -> None:
+        # Don't apply work mode filter - leave it blank as requested
+        # Only apply salary filter if needed
         try:
             salary_btn = page.query_selector("button:has-text('Salary'), span:has-text('Salary')")
             if salary_btn and salary_btn.is_visible():
@@ -100,15 +103,7 @@ class JobSearch:
         except Exception as e:
             print(f"Salary filter failed: {e}")
 
-        try:
-            for jt in job_types:
-                type_btn = page.query_selector(f"label:has-text('{jt}'), span:has-text('{jt}')")
-                if type_btn and type_btn.is_visible():
-                    type_btn.click()
-                    page.wait_for_timeout(500)
-            page.wait_for_load_state("networkidle", timeout=10000)
-        except Exception as e:
-            print(f"Job type filter failed: {e}")
+        # Skip job type filter (work mode) - leave it blank
 
     def _extract_jobs(self, page: Any) -> list[dict[str, Any]]:
         jobs = []
