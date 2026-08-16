@@ -1,9 +1,17 @@
 strict_roles:
-  - "Cloud & DevOps"
+  - "Cloud & DevOps Engineer"
   - "DevOps Engineer"
   - "AWS Engineer"
   - "Azure DevOps Engineer"
   - "Site Reliability Engineer"
+preferred_locations:
+  - "Bengaluru"
+  - "Hyderabad"
+  - "Pune"
+  - "Chennai"
+  - "Delhi / NCR"
+  - "Mumbai"
+  - "Remote"
 reject_keywords:
   - "Python Developer"
   - "Java Developer"

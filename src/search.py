@@ -56,6 +56,7 @@ class JobSearch:
 
         self._apply_filters(page, salary_min, salary_max, job_types)
 
+        # Ensure sort by date is applied after each page navigation
         self._sort_by_date(page)
 
         jobs = []
@@ -63,24 +64,29 @@ class JobSearch:
         return jobs
 
     def _sort_by_date(self, page: Any) -> None:
-        try:
-            page.wait_for_selector("#filter-sort", timeout=20000)
-            sort_btn = page.query_selector("#filter-sort")
-            if sort_btn and sort_btn.is_visible():
-                sort_btn.click()
-                page.wait_for_timeout(2000)
-                date_option = page.query_selector("[data-filter-id='sort'] a[data-id='filter-sort-f']")
-                if date_option and date_option.is_visible():
-                    date_option.click()
-                    # Wait for results to reload
-                    page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=20000)
-                    print("  Sorted by date")
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                page.wait_for_selector("#filter-sort", timeout=20000)
+                sort_btn = page.query_selector("#filter-sort")
+                if sort_btn and sort_btn.is_visible():
+                    sort_btn.click()
+                    page.wait_for_timeout(2000)
+                    date_option = page.query_selector("[data-filter-id='sort'] a[data-id='filter-sort-f']")
+                    if date_option and date_option.is_visible():
+                        date_option.click()
+                        page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=20000)
+                        print("  Sorted by date")
+                        return
+                    else:
+                        print("  Date option not found")
                 else:
-                    print("  Date option not found")
-            else:
-                print("  Sort button not found")
-        except Exception as e:
-            print(f"  Sort by date failed: {e}")
+                    print("  Sort button not found")
+            except Exception as e:
+                print(f"  Sort by date attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    page.wait_for_timeout(2000)
+        print("  Sort by date failed after retries")
 
     def _apply_filters(self, page: Any, salary_min: int, salary_max: int, job_types: list[str]) -> None:
         # Don't apply work mode filter - leave it blank as requested
