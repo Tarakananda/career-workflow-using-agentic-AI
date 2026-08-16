@@ -48,16 +48,37 @@ class JobSearch:
 
     def _search_keyword(self, page: Any, keyword: str, salary_min: int, salary_max: int, job_types: list[str]) -> list[dict[str, Any]]:
         base_url = f"https://www.naukri.com/{keyword.lower().replace(' ', '-').replace('&', '')}-jobs"
-        search_url = f"{base_url}?experience=3&sortBy=date"
+        search_url = f"{base_url}?experience=3"
         print(f"  Navigating to: {search_url}")
         page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_load_state("networkidle", timeout=30000)
 
         self._apply_filters(page, salary_min, salary_max, job_types)
 
+        self._sort_by_date(page)
+
         jobs = []
         jobs.extend(self._extract_jobs(page))
         return jobs
+
+    def _sort_by_date(self, page: Any) -> None:
+        try:
+            page.wait_for_selector("#filter-sort", timeout=15000)
+            sort_btn = page.query_selector("#filter-sort")
+            if sort_btn and sort_btn.is_visible():
+                sort_btn.click()
+                page.wait_for_timeout(1000)
+                date_option = page.query_selector("[data-filter-id='sort'] a[data-id='filter-sort-f']")
+                if date_option and date_option.is_visible():
+                    date_option.click()
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                    print("  Sorted by date")
+                else:
+                    print("  Date option not found")
+            else:
+                print("  Sort button not found")
+        except Exception as e:
+            print(f"  Sort by date failed: {e}")
 
     def _apply_filters(self, page: Any, salary_min: int, salary_max: int, job_types: list[str]) -> None:
         try:
@@ -107,6 +128,7 @@ class JobSearch:
                             "experience": "",
                             "salary": "",
                             "url": job_data.get("url", ""),
+                            "posted_date": "",
                         })
                     print(f"  Extracted {len(jobs)} jobs from JSON-LD")
                     return jobs
@@ -141,6 +163,7 @@ class JobSearch:
                 exp_elem = card.query_selector(".exp, [class*='exp'], .experience, .expwdth")
                 salary_elem = card.query_selector(".salary, [class*='salary'], .sal, .salary-span")
                 link_elem = card.query_selector("a[href*='job-'], a[href*='/job/'], a.title")
+                posted_elem = card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
 
                 if title_elem:
                     jobs.append({
@@ -150,6 +173,7 @@ class JobSearch:
                         "experience": exp_elem.inner_text().strip() if exp_elem else "",
                         "salary": salary_elem.inner_text().strip() if salary_elem else "",
                         "url": link_elem.get_attribute("href") if link_elem else "",
+                        "posted_date": posted_elem.inner_text().strip() if posted_elem else "",
                     })
             except Exception as e:
                 print(f"  Error extracting job: {e}")
