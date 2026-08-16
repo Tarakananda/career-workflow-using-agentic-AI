@@ -50,7 +50,8 @@ class JobApplier:
         
         # More specific selectors for Naukri job description
         selectors = [
-            ".job-desc",
+            "[class*='jd-container']",
+            "[class*='job-desc']",
             ".JDContent",
             "[class*='job-description']",
             ".jobDescription",
@@ -174,8 +175,9 @@ class JobApplier:
                 page = context.new_page()
                 try:
                     print(f"\nProcessing: {job['title'][:60]} at {job['company']}")
-                    page.goto(job["url"], wait_until="domcontentloaded", timeout=45000)
-                    page.wait_for_load_state("networkidle", timeout=20000)
+                    page.goto(job["url"], wait_until="domcontentloaded", timeout=90000)
+                    # Wait for job description container
+                    page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
 
                     jd_text = self.extract_job_description(page)
                     

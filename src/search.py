@@ -50,8 +50,9 @@ class JobSearch:
         base_url = f"https://www.naukri.com/{keyword.lower().replace(' ', '-').replace('&', '')}-jobs"
         search_url = f"{base_url}?experience=3"
         print(f"  Navigating to: {search_url}")
-        page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_load_state("networkidle", timeout=30000)
+        page.goto(search_url, wait_until="domcontentloaded", timeout=90000)
+        # Don't wait for networkidle - just wait for job cards to appear
+        page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=30000)
 
         self._apply_filters(page, salary_min, salary_max, job_types)
 
