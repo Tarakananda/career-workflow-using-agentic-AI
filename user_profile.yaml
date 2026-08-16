@@ -1,0 +1,32 @@
+strict_roles:
+  - "Cloud & DevOps"
+  - "DevOps Engineer"
+  - "AWS Engineer"
+  - "Azure DevOps Engineer"
+  - "Site Reliability Engineer"
+reject_keywords:
+  - "Python Developer"
+  - "Java Developer"
+  - "Full Stack Developer"
+  - "Backend Developer"
+  - "Frontend Developer"
+  - "Data Engineer"
+  - "Data Scientist"
+  - "ML Engineer"
+platforms:
+  - "naukri"
+  - "linkedin"
+  - "indeed"
+  - "foundit"
+  - "ats"
+apply_threshold: 0.8
+salary_min: 1000000
+salary_max: 2500000
+job_types:
+  - "Hybrid"
+  - "WFH"
+  - "On-site"
+auto_apply_enabled: true
+notice_period_months: 3
+expected_ctc_lpa: 12.0
+current_ctc_lpa: 6.0

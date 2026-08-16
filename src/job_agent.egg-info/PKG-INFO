@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: job-agent
+Version: 0.1.0
+Summary: AI agent that reads resume and applies for matching jobs
+Requires-Python: >=3.10
+Requires-Dist: playwright>=1.40
+Requires-Dist: playwright-stealth>=1.0
