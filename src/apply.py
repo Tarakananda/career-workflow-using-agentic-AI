@@ -6,6 +6,7 @@ from playwright_stealth.stealth import Stealth
 
 from src.matcher import is_recent_job, should_apply, extract_skills_from_text
 from src.resume import parse_resume, Resume
+from src.data_collector import JobDataCollector
 
 
 class JobApplier:
@@ -22,6 +23,7 @@ class JobApplier:
         self.resume: Resume = parse_resume(resume_file)
         self.match_threshold = match_threshold
         self.max_days_old = max_days_old
+        self.collector = JobDataCollector()
 
     def load_session(self) -> list[dict[str, Any]] | None:
         if not self.session_file.exists():
@@ -98,6 +100,20 @@ class JobApplier:
         posted_elem = card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
         if posted_elem:
             return posted_elem.inner_text().strip()
+        return ""
+
+    def get_company_from_card(self, card: Any) -> str:
+        """Extract company name from job card."""
+        company_elem = card.query_selector("a.company, a[class*='company'], .companyName, .subTitle")
+        if company_elem:
+            return company_elem.inner_text().strip()
+        return ""
+
+    def get_experience_from_card(self, card: Any) -> str:
+        """Extract experience from job card."""
+        exp_elem = card.query_selector(".exp, [class*='exp'], .experience, .expwdth")
+        if exp_elem:
+            return exp_elem.inner_text().strip()
         return ""
 
     def is_relevant_title(self, title: str) -> bool:
@@ -178,6 +194,8 @@ class JobApplier:
                 title = title_elem.inner_text().strip()
                 url = link_elem.get_attribute("href")
                 posted = self.get_posted_date_from_card(card)
+                company = self.get_company_from_card(card)
+                experience = self.get_experience_from_card(card)
                 
                 # Check if recent
                 if not is_recent_job(posted, self.max_days_old):
@@ -193,6 +211,8 @@ class JobApplier:
                 
                 print(f"\n  [{card_index+1}] Checking: {title[:60]}")
                 print(f"      Posted: {posted}")
+                print(f"      Company: {company}")
+                print(f"      Experience: {experience}")
                 print(f"      URL: {url}")
                 
                 # Click job to open detail page
@@ -203,7 +223,6 @@ class JobApplier:
                 except Exception as e:
                     print(f"      ✗ Failed to open job: {e}")
                     errors.append({"title": title, "url": url, "error": str(e)})
-                    # Reload search page
                     card_index += 1
                     continue
                 
@@ -220,6 +239,25 @@ class JobApplier:
                     print(f"      Skills in JD: {job_skills[:10]}")
                     print(f"      Match: {match_pct:.1f}% | Matched: {matched} | Missing: {missing[:5]}")
                     
+                    # Collect job data for output file
+                    job_data = {
+                        "role": keyword,
+                        "title": title,
+                        "company": company,
+                        "experience": experience,
+                        "posted_date": posted,
+                        "url": url,
+                        "jd_text": jd_text,
+                        "jd_skills": job_skills,
+                        "resume_skills": self.resume.skills,
+                        "matched_skills": matched,
+                        "missing_skills": missing,
+                        "match_percentage": round(match_pct, 1),
+                        "applied": False,
+                        "status": "skipped" if not should else "applied",
+                        "error": None
+                    }
+                    
                     if should:
                         print(f"      ✓ Match > {self.match_threshold}%, applying...")
                         if self.click_apply(page):
@@ -230,6 +268,8 @@ class JobApplier:
                                 "match_pct": match_pct,
                                 "posted": posted
                             })
+                            job_data["applied"] = True
+                            job_data["status"] = "applied"
                             print(f"      ✓ Applied successfully")
                         else:
                             errors.append({
@@ -237,6 +277,8 @@ class JobApplier:
                                 "url": url, 
                                 "error": "Apply button not found"
                             })
+                            job_data["status"] = "error"
+                            job_data["error"] = "Apply button not found"
                             print(f"      ✗ Apply button not found")
                     else:
                         skipped.append({
@@ -248,11 +290,15 @@ class JobApplier:
                         })
                         print(f"      ✗ Match < {self.match_threshold}%, skipping")
                     
+                    self.collector.add_job(job_data)
                     processed += 1
                     
                 except Exception as e:
                     print(f"      ✗ Error processing JD: {e}")
                     errors.append({"title": title, "url": url, "error": str(e)})
+                    job_data["status"] = "error"
+                    job_data["error"] = str(e)
+                    self.collector.add_job(job_data)
                 
                 # Move to next card (will reload page)
                 card_index += 1
@@ -318,10 +364,15 @@ class JobApplier:
             finally:
                 browser.close()
         
+        # Print table and save file
+        self.collector.print_table()
+        filepath = self.collector.save()
+        
         return {
             "applied": all_applied,
             "skipped": all_skipped,
             "errors": all_errors,
+            "output_file": str(filepath)
         }
 
 
@@ -345,6 +396,8 @@ def main():
     print(f"\nErrors: {len(result['errors'])}")
     for e in result['errors']:
         print(f"  ! {e.get('title', 'Unknown')[:60]}: {e.get('error', 'Unknown')}")
+    
+    print(f"\nOutput saved to: {result.get('output_file', 'N/A')}")
 
 
 if __name__ == "__main__":
