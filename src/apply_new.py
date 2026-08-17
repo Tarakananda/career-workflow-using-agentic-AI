@@ -1001,6 +1001,15 @@ class JobApplier:
 
         card_index = 0
         while processed < max_jobs and card_index < len(cards):
+            # Close any extra tabs (keep only the main search page)
+            while len(context.pages) > 1:
+                try:
+                    extra_page = context.pages[-1]
+                    if extra_page != page:
+                        extra_page.close()
+                except Exception:
+                    break
+            
             # Re-query cards if stale (after tab operations)
             try:
                 card = cards[card_index]
