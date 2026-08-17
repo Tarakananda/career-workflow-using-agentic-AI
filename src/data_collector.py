@@ -3,6 +3,12 @@ from typing import Any
 import json
 from datetime import datetime
 
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+
 
 class JobDataCollector:
     def __init__(self, output_dir: Path = Path("output")):
@@ -71,3 +77,41 @@ class JobDataCollector:
 def create_collector() -> JobDataCollector:
     """Factory function to create collector."""
     return JobDataCollector()
+
+
+class ManualApplyCollector:
+    def __init__(self, output_dir: Path = Path("output")):
+        self.output_dir = output_dir
+        self.output_dir.mkdir(exist_ok=True)
+        self.jobs_data = []
+    
+    def add_job(self, job_data: dict[str, Any]) -> None:
+        self.jobs_data.append(job_data)
+    
+    def save_excel(self) -> Path:
+        if not PANDAS_AVAILABLE:
+            print("pandas not available, skipping Excel export")
+            return None
+        
+        df = pd.DataFrame(self.jobs_data)
+        cols = [
+            "role", "title", "company", "posted_date", "experience",
+            "location", "match_percentage", "matched_skills", "missing_skills",
+            "naukri_url", "company_site_url", "status", "timestamp"
+        ]
+        df = df[[c for c in cols if c in df.columns]]
+        
+        filename = f"manual_apply_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filepath = self.output_dir / filename
+        df.to_excel(filepath, index=False)
+        print(f"Saved {len(self.jobs_data)} manual apply jobs to {filepath}")
+        return filepath
+    
+    def print_table(self) -> None:
+        if not self.jobs_data:
+            return
+        print(f"\n{'='*100}")
+        print(f"MANUAL APPLY NEEDED ({len(self.jobs_data)} jobs)")
+        print(f"{'='*100}")
+        for job in self.jobs_data:
+            print(f"  {job['title'][:50]} | {job['company'][:20]} | {job['match_percentage']}% | {job['naukri_url']}")
