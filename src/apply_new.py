@@ -1,7 +1,9 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 import yaml
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from playwright_stealth.stealth import Stealth
 from playwright.sync_api import sync_playwright
@@ -9,6 +11,7 @@ from playwright.sync_api import sync_playwright
 from src.matcher_v2 import is_recent_job, should_apply, extract_skills_from_text, calculate_weighted_match, get_missing_required_skills
 from src.resume import parse_resume, Resume
 from src.data_collector import JobDataCollector, ManualApplyCollector
+from src.ui import LiveJobTable, JobRow, JobStatus, create_ui
 
 
 class JobApplier:
@@ -19,6 +22,8 @@ class JobApplier:
         resume_file: Path = Path("CV_Tarakananda_Optimized.pdf"),
         match_threshold: float = None,
         max_days_old: int = 1,
+        ui: Optional[LiveJobTable] = None,
+        max_parallel: int = 3,
     ):
         self.session_file = session_file
         self.profile = yaml.safe_load(profile_file.read_text())
@@ -35,6 +40,7 @@ class JobApplier:
         self.min_skill_match = self.profile.get("min_skill_match", 80)
         self.max_days_old = max_days_old
         self.job_delay = self.profile.get("job_delay_seconds", 2)
+        self.max_parallel = self.profile.get("max_parallel_jobs", max_parallel)
         
         # Use profile's min_skill_match if not explicitly provided
         if match_threshold is None:
@@ -43,6 +49,7 @@ class JobApplier:
         
         self.collector = JobDataCollector()
         self.manual_collector = ManualApplyCollector()
+        self.ui = ui
 
         # Build experience map from resume for answering questions
         self.experience_map = self._build_experience_map()
@@ -52,6 +59,12 @@ class JobApplier:
         
         # Chatbot debug flag
         self._chatbot_debug_done = False
+        
+        # Thread safety for parallel processing
+        self._browser_lock = threading.Lock()
+        self._context = None
+        self._browser = None
+        self._playwright = None
 
     def _build_experience_map(self) -> dict[str, str]:
         """Build a map of skill -> years of experience from resume."""
@@ -1212,10 +1225,17 @@ class JobApplier:
         """Process a single role: search, filter, check each job, apply if match."""
         base_url = f"https://www.naukri.com/{keyword.lower().replace(' ', '-').replace('&', '')}-jobs"
         search_url = f"{base_url}?experience=3"
-        print(f"\n{'='*60}")
-        print(f"Processing role: {keyword}")
-        print(f"URL: {search_url}")
-        print(f"{'='*60}")
+        
+        if self.ui:
+            self.ui.console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+            self.ui.console.print(f"[bold cyan]Processing role: {keyword}[/bold cyan]")
+            self.ui.console.print(f"[bold cyan]URL: {search_url}[/bold cyan]")
+            self.ui.console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+        else:
+            print(f"\n{'='*60}")
+            print(f"Processing role: {keyword}")
+            print(f"URL: {search_url}")
+            print(f"{'='*60}")
 
         applied = []
         skipped = []
@@ -1249,15 +1269,26 @@ class JobApplier:
             posted_elem = first_card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
             if posted_elem:
                 posted_text = posted_elem.inner_text().strip().lower()
-                print(f"  Verified first job posted: {posted_text}")
+                if self.ui:
+                    self.ui.console.print(f"  Verified first job posted: {posted_text}")
+                else:
+                    print(f"  Verified first job posted: {posted_text}")
 
         # Dismiss chatbot again after filters (may reappear)
         self._dismiss_chatbot_overlay(page)
 
         # Get initial job cards AFTER filters and sort are applied
         cards = page.query_selector_all("[data-job-id], .jobTuple, .job-card")
-        print(f"Found {len(cards)} job cards after filters and sort")
+        total_cards = len(cards)
+        if self.ui:
+            self.ui.console.print(f"Found {total_cards} job cards after filters and sort")
+        else:
+            print(f"Found {total_cards} job cards after filters and sort")
 
+        # Use parallel processing if max_parallel > 1
+        if self.max_parallel > 1:
+            return self._process_role_parallel(page, keyword, max_jobs, context, cards, total_cards)
+        
         card_index = 0
         while processed < max_jobs and card_index < len(cards):
             # Close any extra tabs (keep only the main search page)
@@ -1278,7 +1309,10 @@ class JobApplier:
                 # Stale element - re-query
                 cards = page.query_selector_all("[data-job-id], .jobTuple, .job-card")
                 if card_index >= len(cards):
-                    print("No more cards to process")
+                    if self.ui:
+                        self.ui.console.print("No more cards to process")
+                    else:
+                        print("No more cards to process")
                     break
                 card = cards[card_index]
 
@@ -1299,21 +1333,36 @@ class JobApplier:
 
                 # Check if recent
                 if not is_recent_job(posted, self.max_days_old):
-                    print(f"  [{card_index+1}] Skip (old): {title[:50]} | Posted: {posted}")
+                    if self.ui:
+                        row = self.ui.add_job(card_index, title)
+                        self.ui.update_job(card_index, status=JobStatus.SKIPPED_OLD)
+                        self.ui.increment_processed(JobStatus.SKIPPED_OLD)
+                    else:
+                        print(f"  [{card_index+1}] Skip (old): {title[:50]} | Posted: {posted}")
                     card_index += 1
                     continue
 
                 # Check if relevant title (only if check_all_jobs is False)
                 if not self.check_all_jobs and not self.is_relevant_title(title):
-                    print(f"  [{card_index+1}] Skip (irrelevant): {title[:50]} | Posted: {posted}")
+                    if self.ui:
+                        row = self.ui.add_job(card_index, title)
+                        self.ui.update_job(card_index, status=JobStatus.SKIPPED_IRRELEVANT)
+                        self.ui.increment_processed(JobStatus.SKIPPED_IRRELEVANT)
+                    else:
+                        print(f"  [{card_index+1}] Skip (irrelevant): {title[:50]} | Posted: {posted}")
                     card_index += 1
                     continue
 
-                print(f"\n  [{card_index+1}] Checking: {title[:60]}")
-                print(f"      Posted: {posted}")
-                print(f"      Company: {company}")
-                print(f"      Experience: {experience}")
-                print(f"      URL: {url}")
+                # Create UI row for this job
+                if self.ui:
+                    row = self.ui.add_job(card_index, title)
+                    self.ui.update_job(card_index, company=company, experience=experience, status=JobStatus.FETCHING)
+                else:
+                    print(f"\n  [{card_index+1}] Checking: {title[:60]}")
+                    print(f"      Posted: {posted}")
+                    print(f"      Company: {company}")
+                    print(f"      Experience: {experience}")
+                    print(f"      URL: {url}")
 
                 # Click job to open detail page in NEW TAB (with retry)
                 job_page = None
@@ -1326,14 +1375,21 @@ class JobApplier:
                         job_page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
                         break
                     except Exception as e:
-                        print(f"      ✗ Failed to open job (attempt {attempt+1}/3): {e}")
+                        if self.ui:
+                            self.ui.update_job(card_index, status=JobStatus.ERROR, error_msg=f"Open failed: {e}")
+                        else:
+                            print(f"      ✗ Failed to open job (attempt {attempt+1}/3): {e}")
                         if job_page:
                             try:
                                 job_page.close()
                             except:
                                 pass
                         if attempt == 2:
-                            print(f"      ✗ Failed to open job after 3 attempts: {e}")
+                            if self.ui:
+                                self.ui.update_job(card_index, status=JobStatus.ERROR, error_msg=f"Open failed after 3 attempts: {e}")
+                                self.ui.increment_processed(JobStatus.ERROR)
+                            else:
+                                print(f"      ✗ Failed to open job after 3 attempts: {e}")
                             errors.append({"title": title, "url": url, "error": str(e)})
                             card_index += 1
                             continue
@@ -1346,6 +1402,9 @@ class JobApplier:
                 # Extract JD and check skills from new tab (with timeout and error handling)
                 job_data = None
                 try:
+                    if self.ui:
+                        self.ui.update_job(card_index, status=JobStatus.ANALYZING)
+                    
                     jd_text = self.extract_job_description(job_page)
                     jd_text = jd_text[:5000]
 
@@ -1358,8 +1417,11 @@ class JobApplier:
                         resume_skills, jd_text, self.match_threshold
                     )
 
-                    print(f"      Skills in JD: {job_skills[:10]}")
-                    print(f"      Match: {match_pct:.1f}% | Matched: {matched} | Missing: {missing[:5]}")
+                    if self.ui:
+                        self.ui.update_job(card_index, match_pct=match_pct, missing_skills=missing[:5])
+                    else:
+                        print(f"      Skills in JD: {job_skills[:10]}")
+                        print(f"      Match: {match_pct:.1f}% | Matched: {matched} | Missing: {missing[:5]}")
 
                     # Get salary and location from card
                     salary = self.get_salary_from_card(card)
@@ -1387,27 +1449,20 @@ class JobApplier:
                     }
 
                     if should:
-                        print(f"      ✓ Match > {self.match_threshold}%, applying...")
-                        # Wait for apply button to be ready - use loop with query_selector
-                        apply_btn = None
-                        for attempt in range(15):
-                            job_page.wait_for_timeout(1000)
-                            apply_btn = job_page.query_selector("#apply-button")
-                            if apply_btn:
-                                print(f"  Attempt {attempt+1}: Apply button found via query_selector, is_visible={apply_btn.is_visible()}, url={job_page.url}")
-                                break
-                            else:
-                                print(f"  Attempt {attempt+1}: Apply button not found yet, url={job_page.url}")
-
-                        if not apply_btn:
-                            print("  Apply button not found after 15 seconds")
-                            # Debug: dump all visible buttons
-                            buttons = job_page.query_selector_all("button")
-                            for b in buttons:
-                                if b.is_visible():
-                                    txt = b.inner_text().strip().lower()
-                                    if 'apply' in txt or 'company' in txt or 'save' in txt:
-                                        print(f"  Visible button: '{b.inner_text().strip()}' ID: {b.get_attribute('id')} Class: {b.get_attribute('class')}")
+                        if self.ui:
+                            self.ui.update_job(card_index, salary=salary, location=location, status=JobStatus.APPLYING)
+                        else:
+                            print(f"      ✓ Match > {self.match_threshold}%, applying...")
+                            # Wait for apply button to be ready - use loop with query_selector
+                            apply_btn = None
+                            for attempt in range(15):
+                                job_page.wait_for_timeout(1000)
+                                apply_btn = job_page.query_selector("#apply-button")
+                                if apply_btn:
+                                    print(f"  Attempt {attempt+1}: Apply button found via query_selector, is_visible={apply_btn.is_visible()}, url={job_page.url}")
+                                    break
+                                else:
+                                    print(f"  Attempt {attempt+1}: Apply button not found yet, url={job_page.url}")
 
                         # Use new click_apply with outcome detection
                         result = self.click_apply(job_page, context, job_data)
@@ -1431,7 +1486,11 @@ class JobApplier:
                             })
                             job_data["applied"] = True
                             job_data["status"] = "company_site"
-                            print(f"      → Company site opened, added to manual apply list")
+                            if self.ui:
+                                self.ui.update_job(card_index, salary=salary, location=location, status=JobStatus.COMPANY_SITE)
+                                self.ui.increment_processed(JobStatus.COMPANY_SITE)
+                            else:
+                                print(f"      → Company site opened, added to manual apply list")
                         elif result["status"] == "chatbot":
                             applied.append({
                                 "title": title,
@@ -1441,7 +1500,11 @@ class JobApplier:
                             })
                             job_data["applied"] = True
                             job_data["status"] = "applied"
-                            print(f"      ✓ Applied via chatbot")
+                            if self.ui:
+                                self.ui.update_job(card_index, salary=salary, location=location, status=JobStatus.APPLIED)
+                                self.ui.increment_processed(JobStatus.APPLIED)
+                            else:
+                                print(f"      ✓ Applied via chatbot")
                         elif result["status"] == "chatbot_partial":
                             # Unanswered questions = failed per requirement
                             errors.append({
@@ -1451,7 +1514,11 @@ class JobApplier:
                             })
                             job_data["status"] = "failed"
                             job_data["error"] = f"Chatbot unanswered questions: {result['unanswered']}"
-                            print(f"      ✗ Chatbot incomplete - unanswered questions")
+                            if self.ui:
+                                self.ui.update_job(card_index, status=JobStatus.SKIPPED_QUESTIONS, error_msg="Unanswered questions")
+                                self.ui.increment_processed(JobStatus.SKIPPED_QUESTIONS)
+                            else:
+                                print(f"      ✗ Chatbot incomplete - unanswered questions")
                         else:
                             errors.append({
                                 "title": title,
@@ -1460,7 +1527,11 @@ class JobApplier:
                             })
                             job_data["status"] = "error"
                             job_data["error"] = result.get("error", "Apply failed")
-                            print(f"      ✗ Apply failed: {result.get('error', 'Unknown')}")
+                            if self.ui:
+                                self.ui.update_job(card_index, status=JobStatus.ERROR, error_msg=result.get("error", "Apply failed")[:40])
+                                self.ui.increment_processed(JobStatus.ERROR)
+                            else:
+                                print(f"      ✗ Apply failed: {result.get('error', 'Unknown')}")
                     else:
                         skipped.append({
                             "title": title,
@@ -1469,13 +1540,21 @@ class JobApplier:
                             "missing": missing,
                             "posted": posted
                         })
-                        print(f"      ✗ Match < {self.match_threshold}%, skipping")
+                        if self.ui:
+                            self.ui.update_job(card_index, salary=salary, location=location, status=JobStatus.SKIPPED_MISMATCH)
+                            self.ui.increment_processed(JobStatus.SKIPPED_MISMATCH)
+                        else:
+                            print(f"      ✗ Match < {self.match_threshold}%, skipping")
 
                     self.collector.add_job(job_data)
                     processed += 1
 
                 except Exception as e:
-                    print(f"      ✗ Error processing JD: {e}")
+                    if self.ui:
+                        self.ui.update_job(card_index, status=JobStatus.ERROR, error_msg=str(e)[:40])
+                        self.ui.increment_processed(JobStatus.ERROR)
+                    else:
+                        print(f"      ✗ Error processing JD: {e}")
                     errors.append({"title": title, "url": url, "error": str(e)})
                     if job_data:
                         job_data["status"] = "error"
@@ -1493,12 +1572,236 @@ class JobApplier:
                     page.wait_for_timeout(self.job_delay * 1000)
 
             except Exception as e:
-                print(f"  ✗ Error with card {card_index}: {e}")
+                if self.ui:
+                    self.ui.update_job(card_index, status=JobStatus.ERROR, error_msg=str(e)[:40])
+                    self.ui.increment_processed(JobStatus.ERROR)
+                else:
+                    print(f"  ✗ Error with card {card_index}: {e}")
                 card_index += 1
                 continue
 
         if processed == 0:
-            print("No matching jobs found to process")
+            if self.ui:
+                self.ui.console.print("No matching jobs found to process")
+            else:
+                print("No matching jobs found to process")
+
+        return {"applied": applied, "skipped": skipped, "errors": errors}
+
+    def _process_role_parallel(self, page: Any, keyword: str, max_jobs: int, context: Any, cards: list, total_cards: int) -> dict:
+        """Process jobs in parallel using multiple browser contexts."""
+        from playwright.sync_api import sync_playwright
+        
+        applied = []
+        skipped = []
+        errors = []
+        processed = 0
+        
+        # Create a semaphore to limit concurrent jobs
+        semaphore = threading.Semaphore(self.max_parallel)
+        results_lock = threading.Lock()
+        
+        def process_single_job(card_index: int) -> dict:
+            """Process a single job card in its own browser context."""
+            with semaphore:
+                # Create new browser context for this job
+                with self._browser_lock:
+                    if not self._playwright:
+                        return {"error": "Browser not initialized"}
+                    job_context = self._browser.new_context()
+                    job_context.add_cookies(context.cookies())
+                    job_page = job_context.new_page()
+                    job_page.set_default_timeout(60000)
+                    job_page.set_default_navigation_timeout(90000)
+                
+                try:
+                    # Re-find the card in the new context (navigate to search page)
+                    base_url = f"https://www.naukri.com/{keyword.lower().replace(' ', '-').replace('&', '')}-jobs"
+                    search_url = f"{base_url}?experience=3"
+                    job_page.goto(search_url, wait_until="domcontentloaded", timeout=90000)
+                    job_page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=30000)
+                    self._apply_location_filters(job_page)
+                    self.sort_by_date(job_page)
+                    job_page.wait_for_timeout(2000)
+                    
+                    job_cards = job_page.query_selector_all("[data-job-id], .jobTuple, .job-card")
+                    if card_index >= len(job_cards):
+                        return {"error": "Card index out of range", "skipped": True}
+                    
+                    card = job_cards[card_index]
+                    
+                    # Get title and posted date from card
+                    title_elem = card.query_selector("a.title, a[class*='title'], h2 a, h3 a, .job-title a")
+                    link_elem = card.query_selector("a[href*='job-'], a[href*='/job/'], a.title")
+
+                    if not title_elem or not link_elem:
+                        return {"error": "No title/link element", "skipped": True}
+
+                    title = title_elem.inner_text().strip()
+                    url = link_elem.get_attribute("href")
+                    posted = self.get_posted_date_from_card(card)
+                    company = self.get_company_from_card(card)
+                    experience = self.get_experience_from_card(card)
+
+                    # Check if recent
+                    if not is_recent_job(posted, self.max_days_old):
+                        return {"skipped": True, "reason": "old", "title": title, "posted": posted}
+
+                    # Check if relevant title
+                    if not self.check_all_jobs and not self.is_relevant_title(title):
+                        return {"skipped": True, "reason": "irrelevant", "title": title, "posted": posted}
+
+                    # Click job to open detail page
+                    job_detail_page = None
+                    for attempt in range(3):
+                        try:
+                            with job_context.expect_page() as new_page_info:
+                                link_elem.click()
+                            job_detail_page = new_page_info.value
+                            job_detail_page.wait_for_load_state("domcontentloaded", timeout=30000)
+                            job_detail_page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
+                            break
+                        except Exception as e:
+                            if job_detail_page:
+                                try:
+                                    job_detail_page.close()
+                                except:
+                                    pass
+                            if attempt == 2:
+                                return {"error": f"Failed to open job: {e}", "title": title, "url": url}
+                            job_page.wait_for_timeout(2000)
+                    
+                    if not job_detail_page:
+                        return {"error": "No job detail page", "title": title, "url": url}
+
+                    try:
+                        jd_text = self.extract_job_description(job_detail_page)
+                        jd_text = jd_text[:5000]
+
+                        job_skills = extract_skills_from_text(jd_text)
+                        resume_skills = self.profile.get("optimized_skills", self.resume.skills)
+                        
+                        should, match_pct, matched, missing = should_apply(
+                            resume_skills, jd_text, self.match_threshold
+                        )
+
+                        salary = self.get_salary_from_card(card)
+                        location = self.get_location_from_card(card)
+
+                        job_data = {
+                            "role": keyword,
+                            "title": title,
+                            "company": company,
+                            "experience": experience,
+                            "posted_date": posted,
+                            "url": url,
+                            "salary": salary,
+                            "location": location,
+                            "jd_text": jd_text,
+                            "jd_skills": job_skills,
+                            "resume_skills": resume_skills,
+                            "matched_skills": matched,
+                            "missing_skills": missing,
+                            "match_percentage": round(match_pct, 1),
+                            "applied": False,
+                            "status": "skipped" if not should else "applied",
+                            "error": None
+                        }
+
+                        if should:
+                            result = self.click_apply(job_detail_page, job_context, job_data)
+                            
+                            if result["status"] == "applied":
+                                return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data}
+                            elif result["status"] == "company_site":
+                                return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data, "company_site": True}
+                            elif result["status"] == "chatbot":
+                                return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data}
+                            elif result["status"] == "chatbot_partial":
+                                return {"error": f"Chatbot unanswered questions: {result['unanswered']}", "title": title, "url": url, "job_data": job_data}
+                            else:
+                                return {"error": result.get("error", "Apply failed"), "title": title, "url": url, "job_data": job_data}
+                        else:
+                            return {"skipped": True, "reason": "mismatch", "title": title, "url": url, "match_pct": match_pct, "missing": missing, "posted": posted, "job_data": job_data}
+
+                    except Exception as e:
+                        return {"error": str(e), "title": title, "url": url}
+                    finally:
+                        self._close_job_tab_safely(job_detail_page, job_page)
+                        job_context.close()
+
+                except Exception as e:
+                    return {"error": str(e), "title": title if 'title' in locals() else "Unknown"}
+                finally:
+                    try:
+                        job_context.close()
+                    except:
+                        pass
+
+        # Collect card indices to process
+        card_indices = list(range(min(max_jobs, total_cards)))
+        
+        # Process in parallel
+        with ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
+            future_to_index = {executor.submit(process_single_job, idx): idx for idx in card_indices}
+            
+            for future in as_completed(future_to_index):
+                result = future.result()
+                
+                with results_lock:
+                    processed += 1
+                    
+                    if result.get("applied"):
+                        applied.append({
+                            "title": result["title"],
+                            "url": result["url"],
+                            "match_pct": result["match_pct"],
+                            "posted": result["posted"]
+                        })
+                        if self.ui:
+                            status = JobStatus.COMPANY_SITE if result.get("company_site") else JobStatus.APPLIED
+                            self.ui.increment_processed(status)
+                        job_data = result.get("job_data", {})
+                        job_data["applied"] = True
+                        job_data["status"] = "company_site" if result.get("company_site") else "applied"
+                        self.collector.add_job(job_data)
+                    elif result.get("skipped"):
+                        skipped.append({
+                            "title": result["title"],
+                            "url": result.get("url", ""),
+                            "match_pct": result.get("match_pct", 0),
+                            "missing": result.get("missing", []),
+                            "posted": result.get("posted", "")
+                        })
+                        if self.ui:
+                            if result.get("reason") == "old":
+                                self.ui.increment_processed(JobStatus.SKIPPED_OLD)
+                            elif result.get("reason") == "irrelevant":
+                                self.ui.increment_processed(JobStatus.SKIPPED_IRRELEVANT)
+                            else:
+                                self.ui.increment_processed(JobStatus.SKIPPED_MISMATCH)
+                        job_data = result.get("job_data", {})
+                        if job_data:
+                            self.collector.add_job(job_data)
+                    elif result.get("error"):
+                        errors.append({
+                            "title": result.get("title", "Unknown"),
+                            "url": result.get("url", ""),
+                            "error": result["error"]
+                        })
+                        if self.ui:
+                            self.ui.increment_processed(JobStatus.ERROR)
+                        job_data = result.get("job_data", {})
+                        if job_data:
+                            job_data["status"] = "error"
+                            job_data["error"] = result["error"]
+                            self.collector.add_job(job_data)
+
+        if processed == 0:
+            if self.ui:
+                self.ui.console.print("No matching jobs found to process")
+            else:
+                print("No matching jobs found to process")
 
         return {"applied": applied, "skipped": skipped, "errors": errors}
 
@@ -1514,12 +1817,20 @@ class JobApplier:
         all_skipped = []
         all_errors = []
 
+        # Initialize UI if provided
+        if self.ui:
+            self.ui.start()
+
         with sync_playwright() as p:
             Stealth().use_sync(p)
             browser = p.chromium.launch(headless=self.headless_mode)
-            context = browser.new_context()
-            context.add_cookies(cookies)
-            page = context.new_page()
+            
+            # Store for parallel processing
+            self._playwright = p
+            self._browser = browser
+            self._context = browser.new_context()
+            self._context.add_cookies(cookies)
+            page = self._context.new_page()
             
             # Set longer timeout for headless mode
             page.set_default_timeout(60000)
@@ -1527,26 +1838,42 @@ class JobApplier:
 
             try:
                 for keyword in keywords:
-                    result = self.process_role(page, keyword, max_jobs_per_role, context)
+                    result = self.process_role(page, keyword, max_jobs_per_role, self._context)
                     all_applied.extend(result["applied"])
                     all_skipped.extend(result["skipped"])
                     all_errors.extend(result["errors"])
 
-                    print(f"\nRole '{keyword}' complete: Applied={len(result['applied'])}, Skipped={len(result['skipped'])}, Errors={len(result['errors'])}")
+                    if self.ui:
+                        self.ui.console.print(f"\n[bold green]Role '{keyword}' complete: Applied={len(result['applied'])}, Skipped={len(result['skipped'])}, Errors={len(result['errors'])}[/bold green]")
+                    else:
+                        print(f"\nRole '{keyword}' complete: Applied={len(result['applied'])}, Skipped={len(result['skipped'])}, Errors={len(result['errors'])}")
 
                     # Small delay between roles
                     page.wait_for_timeout(2000)
 
             finally:
                 browser.close()
+                self._playwright = None
+                self._browser = None
+                self._context = None
 
-        # Print table and save file
-        self.collector.print_table()
+        # Stop UI and show final summary
+        if self.ui:
+            self.ui.stop()
+            self.ui.print_final_summary()
+        else:
+            # Print table and save file
+            self.collector.print_table()
+        
         filepath = self.collector.save()
 
         # Save manual apply Excel
         if self.manual_collector.jobs_data:
-            self.manual_collector.print_table()
+            if self.ui:
+                self.ui.console.print("\n[bold cyan]Manual Apply Jobs:[/bold cyan]")
+                self.manual_collector.print_table()
+            else:
+                self.manual_collector.print_table()
             self.manual_collector.save_excel()
 
         return {
@@ -1560,25 +1887,11 @@ class JobApplier:
 def main():
     from src.search import JobSearch
 
-    applier = JobApplier()
+    ui = create_ui()
+    applier = JobApplier(ui=ui, max_parallel=3)
     result = applier.run(max_jobs_per_role=10)
 
-    print("\n" + "=" * 60)
-    print("FINAL SUMMARY")
-    print("=" * 60)
-    print(f"Applied: {len(result['applied'])}")
-    for a in result['applied']:
-        print(f"  ✓ {a['title'][:60]} ({a['match_pct']:.1f}%) | Posted: {a.get('posted', 'Unknown')}")
-
-    print(f"\nSkipped (low match): {len(result['skipped'])}")
-    for s in result['skipped'][:10]:
-        print(f"  ✗ {s['title'][:60]} ({s['match_pct']:.1f}%) | Posted: {s.get('posted', 'Unknown')}")
-
-    print(f"\nErrors: {len(result['errors'])}")
-    for e in result['errors']:
-        print(f"  ! {e.get('title', 'Unknown')[:60]}: {e.get('error', 'Unknown')}")
-
-    print(f"\nOutput saved to: {result.get('output_file', 'N/A')}")
+    # Final summary is now printed by UI
 
 
 if __name__ == "__main__":

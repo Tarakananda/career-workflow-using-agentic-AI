@@ -1,0 +1,782 @@
+# AWS DevOps Engineer Skills Reference List
+# This file contains all skills relevant to AWS DevOps Engineer roles.
+# The agent will check both the job description and your resume against this list.
+# If skill match > 80%, the agent will apply.
+# 
+# Instructions:
+# - Review each category and remove tools/skills you DON'T have
+# - Add any missing skills you possess that aren't listed
+# - The agent calculates weighted match percentage based on this list
+
+aws_core_services:
+  compute:
+    - ec2
+    - lambda
+    - ecs
+    - eks
+    - fargate
+    - elastic_beanstalk
+    - auto_scaling
+    - launch_templates
+    - spot_instances
+  storage:
+    - s3
+    - ebs
+    - efs
+    - fsx
+    - storage_gateway
+    - backup
+  networking:
+    - vpc
+    - subnet
+    - security_groups
+    - nacl
+    - route53
+    - cloudfront
+    - api_gateway
+    - alb
+    - vpn
+    - transit_gateway
+    - vpc_peering
+    - global_accelerator
+  database:
+    - rds
+    - aurora
+    - dynamodb
+    - elasticache
+  security:
+    - iam
+    - secrets_manager
+    - config
+    - cloudtrail
+  monitoring:
+    - cloudwatch
+    - cloudwatch_logs
+    - cloudwatch_metrics
+    - sns
+    - sqs
+
+iac_tools:
+  - terraform
+  - terragrunt
+  - cloudformation
+
+configuration_management_tools:
+  - ansible
+  - chef
+  - puppet
+
+ci_cd_tools:
+  - jenkins
+  - github_actions
+  - gitlab_ci
+  - azure_devops
+  - code_build
+  - code_pipeline
+  - code_deploy
+  - argocd
+  - flux
+  - flux_v2
+  - bitbucket_pipelines
+  - harness
+
+container_orchestration:
+  - docker
+  - kubernetes
+  - eks
+  - ecs
+  - fargate
+  - helm
+  - helmfile
+  - argocd
+  - ingress_controller
+  - istio
+  - containerd
+  - crio
+
+monitoring_observability:
+  - prometheus
+  - grafana
+  - datadog
+  - splunk
+  - elk
+  - elasticsearch
+  - logstash
+  - cloudwatch
+  - cloudwatch_logs
+  - cloudwatch_metrics
+
+security_tools:
+  - trivy
+  - sonarqube
+  - vault
+  - hashicorp_vault
+  - aws_secrets_manager
+  - azure_key_vault
+  - cert_manager
+
+scripting_languages:
+  - python
+  - go
+  - golang
+  - bash
+  - shell
+  - powershell
+  - groovy
+  - ruby
+
+version_control:
+  - git
+  - github
+  - gitlab
+  - github_actions
+  - gitlab_ci
+  - gitops
+
+infrastructure_as_code:
+  - terraform
+  - terragrunt
+  - cloudformation
+
+gitops_tools:
+  - argocd
+  - helm
+  - helmfile
+  - argocd_applications
+  - argocd_projects
+  - argocd_notifications
+  - flux_kustomization
+  - flux_helmrelease
+
+service_mesh:
+  - istio
+
+databases:
+  - postgresql
+  - mysql
+  - dynamodb
+  - cassandra
+  - elasticsearch
+  - opensearch
+  - rds
+  - aurora
+  - cosmos_db
+
+networking:
+  - vpc
+  - subnet
+  - security_group
+  - nacl
+  - alb
+  - route53
+  - cloudfront
+  - api_gateway
+  - vpn
+  - vpc_peering
+  - dns
+  - ssl
+  - tls
+  - certificate_manager
+
+serverless:
+  - lambda
+  - cloud_functions
+  - sqs
+
+devops_culture:
+  - agile
+  - scrum
+  - incident_management
+  - on_call
+  - chaos_engineering
+  - capacity_planning
+
+# Your Current Skills (Extracted from Resume)
+# Mark with 'true' if you have this skill, 'false' if not
+# The agent will only match skills marked true against job descriptions
+
+my_skills:
+  aws_core_services:
+    compute:
+      ec2: true
+      lambda: true
+      ecs: true
+      eks: true
+      fargate: false
+      batch: false
+      lightsail: false
+      elastic_beanstalk: true
+      auto_scaling: true
+      launch_templates: true
+      spot_instances: false
+    storage:
+      s3: true
+      ebs: true
+      efs: true
+      fsx: true
+      storage_gateway: false
+      backup: true
+      glacier: false
+    networking:
+      vpc: true
+      subnet: true
+      security_groups: true
+      nacl: true
+      route53: true
+      cloudfront: true
+      api_gateway: true
+      alb: true
+      nlb: true
+      clb: false
+      direct_connect: false
+      vpn: false
+      transit_gateway: false
+      vpc_peering: true
+      private_link: false
+      global_accelerator: false
+    database:
+      rds: true
+      aurora: true
+      dynamodb: true
+      elasticache: true
+      documentdb: false
+      neptune: false
+      keyspaces: false
+      timestream: false
+      redshift: false
+    security:
+      iam: true
+      kms: true
+      secrets_manager: true
+      parameter_store: false
+      shield: false
+      waf: false
+      guardduty: false
+      inspector: false
+      macie: false
+      config: false
+      cloudtrail: true
+      security_hub: false
+      certificate_manager: true
+    monitoring:
+      cloudwatch: true
+      cloudwatch_logs: true
+      cloudwatch_metrics: true
+      xray: false
+      eventbridge: false
+      sns: true
+      sqs: true
+
+  iac_tools:
+    terraform: true
+    terragrunt: true
+    cloudformation: true
+    cdk: false
+    cdk_tf: false
+    pulumi: false
+    crossplane: false
+    troposphere: false
+    aws_sam: false
+
+  configuration_management:
+    ansible: true
+    chef: false
+    puppet: false
+    saltstack: false
+    packer: true
+
+  ci_cd_tools:
+    jenkins: true
+    github_actions: true
+    gitlab_ci: true
+    azure_devops: true
+    codebuild: false
+    codepipeline: false
+    codeploy: false
+    argocd: true
+    flux: true
+    flux_v2: true
+    tekton: false
+    circleci: false
+    travis_ci: false
+    bitbucket_pipelines: false
+    drone: false
+    concourse: false
+    spinnaker: false
+    harness: false
+
+  container_orchestration:
+    docker: true
+    kubernetes: true
+    eks: true
+    ecs: true
+    fargate: false
+    helm: true
+    kustomize: false
+    helmfile: true
+    argocd: true
+    flux: true
+    flux_v2: true
+    operator_sdk: false
+    crd: false
+    csi: false
+    cni: false
+    ingress_controller: true
+    istio: true
+    linkerd: false
+    envoy: false
+    gateway_api: false
+    containerd: true
+    crio: true
+    podman: false
+    buildah: false
+    kaniko: false
+    buildkit: false
+
+  monitoring_observability:
+    prometheus: true
+    grafana: true
+    loki: false
+    tempo: false
+    alertmanager: false
+    thanos: false
+    cortex: false
+    mimir: false
+    victoriametrics: false
+    datadog: true
+    newrelic: false
+    splunk: false
+    elk: false
+    efk: false
+    elasticsearch: true
+    logstash: true
+    filebeat: true
+    fluentd: false
+    fluentbit: false
+    opentelemetry: false
+    jaeger: false
+    zipkin: false
+    xray: false
+    cloudwatch: true
+    cloudwatch_logs: true
+    cloudwatch_metrics: true
+    xray: false
+
+  security_tools:
+    trivy: true
+    sonarqube: true
+    cosign: false
+    kyverno: false
+    opa: false
+    gatekeeper: false
+    vault: true
+    hashicorp_vault: true
+    aws_secrets_manager: true
+    azure_key_vault: true
+    gcp_secret_manager: false
+    cosign: false
+    syft: false
+    grype: false
+    aquasec: false
+    sysdig: false
+    falco: false
+    kube_bench: false
+    kube_hunter: false
+    kubescape: false
+    kyverno: false
+    cert_manager: false
+
+  scripting_languages:
+    python: true
+    go: true
+    golang: true
+    bash: true
+    shell: true
+    powershell: false
+    groovy: false
+    ruby: false
+
+  version_control:
+    git: true
+    github: true
+    gitlab: true
+    bitbucket: false
+    github_actions: true
+    gitlab_ci: true
+    bitbucket_pipelines: false
+    gitops: true
+
+  infrastructure_as_code:
+    terraform: true
+    terragrunt: true
+    cloudformation: true
+    cdk: false
+    cdk_tf: false
+    pulumi: false
+    crossplane: false
+    troposphere: false
+    aws_sam: false
+    bicep: false
+    arm_templates: false
+
+  gitops_tools:
+    argocd: true
+    flux: true
+    flux_v2: true
+    helm: true
+    kustomize: false
+    helmfile: true
+    argocd_applications: true
+    argocd_projects: true
+    argocd_notifications: true
+    flux_kustomization: false
+    flux_helmrelease: false
+    weave_flux: false
+
+  service_mesh:
+    istio: true
+    linkerd: false
+    envoy: false
+    gateway_api: false
+    consul: false
+    servicemesh: false
+
+  finops_tools:
+    kubecost: false
+    aws_compute_optimizer: false
+    aws_cost_explorer: false
+    aws_budgets: false
+    cloudhealth: false
+    cloudability: false
+    finops: false
+    cost_optimization: false
+    rightsizing: false
+    savings_plans: false
+    reserved_instances: false
+    spot_instances: false
+    fargate_spot: false
+
+  dr_backup:
+    velero: false
+    velero_backup: false
+    velero_restore: false
+    velero_schedule: false
+    cross_region: false
+    cross_account: false
+    dr: false
+    disaster_recovery: false
+    backup: false
+    restore: false
+    rpo: false
+    rto: false
+    business_continuity: false
+
+  databases:
+    postgresql: true
+    mysql: true
+    redis: false
+    dynamodb: true
+    mongodb: false
+    cassandra: false
+    elasticsearch: true
+    opensearch: false
+    rds: true
+    aurora: true
+    cosmos_db: false
+    cloudsql: false
+    firestore: false
+    bigtable: false
+    spanner: false
+
+  networking:
+    vpc: true
+    subnet: true
+    security_group: true
+    nacl: true
+    alb: true
+    nlb: true
+    clb: false
+    route53: true
+    cloudfront: true
+    api_gateway: true
+    vpn: false
+    direct_connect: false
+    transit_gateway: false
+    vpc_peering: true
+    privatelink: false
+    dns: true
+    ssl: true
+    tls: true
+    acm: false
+    certificate_manager: true
+    waf: false
+    shield: false
+    ddos_protection: true
+
+  ml_ai:
+    sagemaker: false
+    bedrock: false
+    comprehend: false
+    rekognition: false
+    textract: false
+    translate: false
+    transcribe: false
+    polly: false
+    lex: false
+    connect: false
+    kendra: false
+    personalize: false
+    forecast: false
+    fraud_detector: false
+
+  serverless:
+    lambda: true
+    cloud_functions: false
+    cloud_run: false
+    step_functions: false
+    eventbridge: false
+    sqs: true
+    sns: true
+    pubsub: false
+    event_grid: false
+    functions_framework: false
+    knative: false
+    openfaas: false
+
+  devops_culture:
+    agile: true
+    scrum: true
+    kanban: true
+    jira: true
+    confluence: false
+    incident_management: true
+    on_call: true
+    runbooks: true
+    postmortems: false
+    blameless_postmortems: false
+    sre: true
+    sli: false
+    slo: false
+    sli_slo: false
+    error_budget: false
+    chaos_engineering: false
+    game_days: false
+    capacity_planning: true
+
+# Agent Matching Configuration
+matching_config:
+  # Minimum percentage of skills that must match for the agent to apply
+  min_match_percentage: 80
+  
+  # Weight categories (higher = more important)
+  category_weights:
+    aws_core_services: 1.5
+    iac_tools: 1.5
+    ci_cd_tools: 1.3
+    container_orchestration: 1.5
+    monitoring_observability: 1.2
+    security_tools: 1.2
+    scripting_languages: 1.1
+    version_control: 1.0
+    infrastructure_as_code: 1.3
+    gitops_tools: 1.3
+    service_mesh: 1.0
+    finops_tools: 1.0
+    dr_backup: 1.0
+    databases: 1.0
+    networking: 1.0
+    ml_ai: 0.5
+    serverless: 1.0
+    devops_culture: 1.0
+
+  # Required categories (must have at least 50% match in each)
+  required_categories:
+    - aws_core_services
+    - iac_tools
+    - container_orchestration
+    - ci_cd_tools
+    - monitoring_observability
+    - security_tools
+
+  # Skill aliases for matching (e.g., "k8s" -> "kubernetes")
+  skill_aliases:
+    "k8s": "kubernetes"
+    "aws cloud": "aws"
+    "azure cloud": "azure"
+    "google cloud": "gcp"
+    "gcp": "google cloud"
+    "ci cd": "ci_cd"
+    "cicd": "ci_cd"
+    "continuous integration": "ci_cd"
+    "continuous deployment": "ci_cd"
+    "infra as code": "infrastructure_as_code"
+    "iac": "infrastructure_as_code"
+    "argocd": "argocd"
+    "argo cd": "argocd"
+    "fluxcd": "flux"
+    "flux cd": "flux"
+    "helm charts": "helm"
+    "k8s": "kubernetes"
+    "eks": "eks"
+    "aks": "aks"
+    "gke": "gke"
+    "ec2": "ec2"
+    "rds": "rds"
+    "s3": "s3"
+    "lambda": "lambda"
+    "cloudformation": "cloudformation"
+    "terraform": "terraform"
+    "terragrunt": "terragrunt"
+    "ansible": "ansible"
+    "packer": "packer"
+    "jenkins": "jenkins"
+    "github actions": "github_actions"
+    "gitlab ci": "gitlab_ci"
+    "azure devops": "azure_devops"
+    "argo cd": "argocd"
+    "argo": "argo"
+    "flux": "flux"
+    "prometheus": "prometheus"
+    "grafana": "grafana"
+    "loki": "loki"
+    "tempo": "tempo"
+    "datadog": "datadog"
+    "cloudwatch": "cloudwatch"
+    "trivy": "trivy"
+    "vault": "vault"
+    "sonarqube": "sonarqube"
+    "istio": "istio"
+    "linkerd": "linkerd"
+    "service mesh": "service_mesh"
+    "docker": "docker"
+    "kubernetes": "kubernetes"
+    "containerd": "containerd"
+    "python": "python"
+    "go": "go"
+    "golang": "go"
+    "bash": "bash"
+    "shell": "bash"
+    "terraform": "terraform"
+    "terragrunt": "terragrunt"
+    "ansible": "ansible"
+    "packer": "packer"
+    "jenkins": "jenkins"
+    "github actions": "github_actions"
+    "gitlab ci": "gitlab_ci"
+    "azure devops": "azure_devops"
+    "argo cd": "argocd"
+    "argo": "argo"
+    "flux": "flux"
+    "prometheus": "prometheus"
+    "grafana": "grafana"
+    "loki": "loki"
+    "tempo": "tempo"
+    "datadog": "datadog"
+    "cloudwatch": "cloudwatch"
+    "trivy": "trivy"
+    "vault": "vault"
+    "sonarqube": "sonarqube"
+    "istio": "istio"
+    "linkerd": "linkerd"
+    "service mesh": "service_mesh"
+    "docker": "docker"
+    "kubernetes": "kubernetes"
+    "containerd": "containerd"
+    "python": "python"
+    "go": "go"
+    "golang": "go"
+    "bash": "bash"
+    "shell": "bash"
+    "terraform": "terraform"
+    "terragrunt": "terragrunt"
+    "ansible": "ansible"
+    "packer": "packer"
+    "jenkins": "jenkins"
+    "github actions": "github_actions"
+    "gitlab ci": "gitlab_ci"
+    "azure devops": "azure_devops"
+    "argo cd": "argocd"
+    "argo": "argo"
+    "flux": "flux"
+    "prometheus": "prometheus"
+    "grafana": "grafana"
+    "loki": "loki"
+    "tempo": "tempo"
+    "datadog": "datadog"
+    "cloudwatch": "cloudwatch"
+    "trivy": "trivy"
+    "vault": "vault"
+    "sonarqube": "sonarqube"
+    "istio": "istio"
+    "linkerd": "linkerd"
+    "service mesh": "service_mesh"
+    "docker": "docker"
+    "kubernetes": "kubernetes"
+    "containerd": "containerd"
+    "python": "python"
+    "go": "go"
+    "golang": "go"
+    "bash": "bash"
+    "shell": "bash"
+    "terraform": "terraform"
+    "terragrunt": "terragrunt"
+    "ansible": "ansible"
+    "packer": "packer"
+    "jenkins": "jenkins"
+    "github actions": "github_actions"
+    "gitlab ci": "gitlab_ci"
+    "azure devops": "azure_devops"
+    "argo cd": "argocd"
+    "argo": "argo"
+    "flux": "flux"
+    "prometheus": "prometheus"
+    "grafana": "grafana"
+    "loki": "loki"
+    "tempo": "tempo"
+    "datadog": "datadog"
+    "cloudwatch": "cloudwatch"
+    "trivy": "trivy"
+    "vault": "vault"
+    "sonarqube": "sonarqube"
+    "istio": "istio"
+    "linkerd": "linkerd"
+    "service mesh": "service_mesh"
+    "docker": "docker"
+    "kubernetes": "kubernetes"
+    "containerd": "containerd"
+    "python": "python"
+    "go": "go"
+    "golang": "go"
+    "bash": "bash"
+    "shell": "bash"
+    "terraform": "terraform"
+    "terragrunt": "terragrunt"
+    "ansible": "ansible"
+    "packer": "packer"
+    "jenkins": "jenkins"
+    "github actions": "github_actions"
+    "gitlab ci": "gitlab_ci"
+    "azure devops": "azure_devops"
+    "argo cd": "argocd"
+    "argo": "argo"
+    "flux": "flux"
+    "prometheus": "prometheus"
+    "grafana": "grafana"
+    "loki": "loki"
+    "tempo": "tempo"
+    "datadog": "datadog"
+    "cloudwatch": "cloudwatch"
+    "trivy": "trivy"
+    "vault": "vault"
+    "sonarqube": "sonarqube"
+    "istio": "istio"
+    "linkerd": "linkerd"
+    "service mesh": "service_mesh"
+    "docker": "docker"
+    "kubernetes": "kubernetes"
+    "containerd": "containerd"
+    "python": "python"
+    "go": "go"
+    "golang": "go"
+    "bash": "bash"
+    "shell": "bash"

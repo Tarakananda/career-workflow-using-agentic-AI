@@ -40,25 +40,25 @@ Availability: Immediate | Location: Hyderabad / Bengaluru (Hybrid/Remote) | Noti
 
 **Replace/Add these skills in your Key Skills section:**
 
-1. Kubernetes (EKS/AKS/GKE)
-2. Terraform / Terragrunt
+1. Kubernetes (EKS/AKS/GKE 1.29+)
+2. Terraform (1.9+) / Terragrunt (0.53+)
 3. AWS (EC2, VPC, EKS, Lambda, RDS, CloudFormation)
 4. Azure (AKS, Functions, DevOps, Key Vault)
 5. GCP (GKE, Cloud Run, Cloud Build)
-6. Docker / Containerization
-7. CI/CD (Jenkins, GitHub Actions, GitLab CI, Azure DevOps)
-8. GitOps (Argo CD, Flux v2)
-9. Helm / Kustomize / Helmfile
+6. Docker (24+) / Containerization
+7. CI/CD (Jenkins 2.462+, GitHub Actions, GitLab CI, Azure DevOps)
+8. GitOps (Argo CD 2.11+, Flux v2)
+9. Helm (3.15+) / Kustomize / Helmfile
 10. Infrastructure as Code (Terraform, CloudFormation, Pulumi awareness)
-11. Prometheus / Grafana / Loki / Tempo
+11. Prometheus (2.50+) / Grafana (10+) / Loki / Tempo
 12. Datadog / CloudWatch / ELK Stack
 13. Python (boto3, automation, scripting)
-14. Go (basics, operators)
+14. Go (1.22+ basics, operators)
 15. Bash / Shell Scripting
-16. Ansible / Configuration Management
-17. Trivy / SonarQube / Container Security
+16. Ansible (2.16+) / Configuration Management
+17. Trivy (0.49+) / SonarQube / Container Security
 18. HashiCorp Vault / AWS Secrets Manager / Azure Key Vault
-19. Service Mesh (Istio basics, mTLS)
+19. Service Mesh (Istio 1.20+ basics, mTLS)
 20. Git / GitHub / GitLab / Bitbucket
 21. Linux / System Administration
 22. Networking (VPC, ALB, Route 53, VPN, DNS)

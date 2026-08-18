@@ -10,6 +10,7 @@ job_types:
 - WFH
 - On-site
 max_days_old: 1
+max_parallel_jobs: 1
 min_skill_match: 80
 notice_period_months: 3
 optimized_skills:
@@ -198,6 +199,48 @@ questions:
   question: How many years of experience do you have in BarnOwl?
 - answer: ''
   question: How many years of experience do you have in Gcp Cloud?
+- answer: ''
+  question: How many years of experience do you have in Python automation engineering?
+- answer: ''
+  question: 'How many years of experience do you have in Python automation engineering?
+
+    3'
+- answer: ''
+  question: 'How many years of experience do you have in Python automation engineering?
+
+    3
+
+    will you relocate to hyderabad?
+
+    years'
+- answer: ''
+  question: 'How many years of experience do you have in Python automation engineering?
+
+    3
+
+    will you relocate to hyderabad?
+
+    years
+
+    Please Mention your ex infy employee id'
+- answer: ''
+  question: 'How many years of experience do you have in Python automation engineering?
+
+    3
+
+    will you relocate to hyderabad?
+
+    years
+
+    Please Mention your ex infy employee id
+
+    no'
+- answer: ''
+  question: Shaping everyday experiences with innovation and sustainability
+- answer: ''
+  question: How many years of experience do you have in Cloud Platform?
+- answer: ''
+  question: How many year experience you have in Manual Testing?
 reject_keywords:
 - Python Developer
 - Java Developer
