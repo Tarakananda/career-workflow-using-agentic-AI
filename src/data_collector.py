@@ -50,24 +50,70 @@ class JobDataCollector:
         return filepath
 
     def print_table(self) -> None:
-        """Print jobs in table format."""
+        """Print jobs in table format with auto-adjusting columns."""
         if not self.jobs_data:
             print("No jobs to display")
             return
         
-        print(f"\n{'='*120}")
-        print(f"{'ROLE':<30} {'COMPANY':<25} {'EXP':<10} {'MISSING SKILLS':<35} {'JD PREVIEW'}")
-        print(f"{'='*120}")
+        import shutil
+        term_width = shutil.get_terminal_size().columns
+        term_width = max(term_width, 100)  # Minimum width
         
+        # Column definitions with min/max widths
+        columns = [
+            ("Title", 20, 35),
+            ("Location", 12, 22),
+            ("Salary", 10, 16),
+            ("Exp", 7, 10),
+            ("Missing Skills", 18, 30),
+            ("Status", 10, 12),
+        ]
+        
+        # Calculate widths proportionally
+        total_min = sum(c[1] for c in columns)
+        total_max = sum(c[2] for c in columns)
+        available = term_width - len(columns) * 3 - 2  # borders + padding
+        
+        if available >= total_max:
+            widths = [c[2] for c in columns]
+        elif available <= total_min:
+            widths = [c[1] for c in columns]
+        else:
+            # Proportional distribution
+            ratio = (available - total_min) / (total_max - total_min)
+            widths = [int(c[1] + (c[2] - c[1]) * ratio) for c in columns]
+        
+        # Build format string
+        fmt = " │ ".join(f"{{:<{w}}}" for w in widths)
+        sep = "─┼─".join("─" * w for w in widths)
+        
+        # Header
+        headers = [c[0] for c in columns]
+        print(fmt.format(*headers))
+        print(f"─{sep}─")
+        
+        # Rows
         for job in self.jobs_data:
-            role = job.get('role', '')[:29]
-            company = job.get('company', '')[:24]
-            exp = job.get('experience', '')[:9]
-            missing = ', '.join(job.get('missing_skills', [])[:5])
-            missing = missing[:34]
-            jd_preview = job.get('jd_text', '')[:80].replace('\n', ' ')
+            title = job.get('title', 'N/A')[:widths[0]-1]
+            location = job.get('location', 'N/A')[:widths[1]-1]
+            salary = job.get('salary', 'N/A')[:widths[2]-1]
+            exp = job.get('experience', 'N/A')[:widths[3]-1]
+            missing = ', '.join(job.get('missing_skills', [])[:3])[:widths[4]-1]
+            applied = job.get('applied', False)
+            status = job.get('status', 'skipped')
             
-            print(f"{role:<30} {company:<25} {exp:<10} {missing:<35} {jd_preview}")
+            if status == 'applied' or status == 'company_site':
+                status_str = "✓ Applied"
+            elif status == 'error':
+                status_str = "⚠ Error"
+            elif status == 'failed':
+                status_str = "✗ Failed"
+            else:
+                status_str = "✗ Skipped"
+            
+            status_str = status_str[:widths[5]-1]
+            
+            print(fmt.format(title, location, salary, exp, missing, status_str))
 
     def clear(self) -> None:
         """Clear collected data."""

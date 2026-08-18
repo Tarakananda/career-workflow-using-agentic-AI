@@ -1,11 +1,16 @@
 apply_threshold: 0.8
 auto_apply_enabled: true
+check_all_jobs: true
 current_ctc_lpa: 6.0
 expected_ctc_lpa: 12.0
+headless_mode: false
+job_delay_seconds: 2
 job_types:
 - Hybrid
 - WFH
 - On-site
+max_days_old: 1
+min_skill_match: 80
 notice_period_months: 3
 optimized_skills:
 - python
@@ -182,6 +187,17 @@ questions:
 
 
     No'
+- answer: ''
+  question: 'Are you currently living in or ready to relocate to Bengaluru ?
+
+    Yes
+
+
+    No'
+- answer: ''
+  question: How many years of experience do you have in BarnOwl?
+- answer: ''
+  question: How many years of experience do you have in Gcp Cloud?
 reject_keywords:
 - Python Developer
 - Java Developer
@@ -195,87 +211,3 @@ salary_max: 2500000
 salary_min: 1000000
 strict_roles:
 - Cloud & DevOps Engineer
-- Site Reliability Engineer
-- AWS DevOps Engineer
-- DevOps Engineer
-- Cloud DevOps Engineer
-- AWS Cloud Engineer
-- Cloud Engineer
-- AWS Engineer
-- AWS Infrastructure Engineer
-- Cloud Infrastructure Engineer
-- DevOps Cloud Engineer
-- AWS DevOps Support Engineer
-- DevOps Support Engineer
-- Cloud Support Engineer
-- AWS Support Engineer
-- Cloud Operations Engineer
-- Cloud Operations / DevOps Engineer
-- AWS Cloud Operations Engineer
-- AWS Operations Engineer
-- AWS Infrastructure Support Engineer
-- AWS Cloud Support Engineer
-- AWS Technical Support Engineer
-- AWS Production Support Engineer
-- AWS Site Reliability Engineer
-- AWS SRE
-- SRE Engineer
-- Cloud SRE
-- DevOps/SRE Engineer
-- Site Reliability / DevOps Engineer
-- Cloud Reliability Engineer
-- Infrastructure Reliability Engineer
-- Production Engineer
-- Cloud Production Engineer
-- Production Support Engineer
-- Platform Engineer
-- AWS Platform Engineer
-- Cloud Platform Engineer
-- AWS Cloud Platform Engineer
-- Platform Operations Engineer
-- AWS Platform Operations Engineer
-- Cloud Platform Operations Engineer
-- Cloud Platform Support Engineer
-- AWS Platform Support Engineer
-- Infrastructure Engineer
-- Cloud Infrastructure Engineer
-- AWS Cloud Infrastructure Engineer
-- Infrastructure Automation Engineer
-- Infrastructure DevOps Engineer
-- DevOps Infrastructure Engineer
-- Cloud Automation Engineer
-- AWS Automation Engineer
-- DevOps Automation Engineer
-- CI/CD Engineer
-- Build & Release Engineer
-- Build and Release Engineer
-- Release Engineer
-- Deployment Engineer
-- Cloud Operations Support Engineer
-- AWS Cloud Operations Support Engineer
-- Infrastructure Operations Engineer
-- Cloud Infrastructure Operations Engineer
-- AWS Infrastructure Operations Engineer
-- DevOps Operations Engineer
-- Cloud DevOps Operations Engineer
-- AWS DevOps Operations Engineer
-- Cloud Operations Support Engineer
-- Cloud Infrastructure Support Engineer
-- DevOps Infrastructure Support Engineer
-- AWS Systems Engineer
-- Cloud Systems Engineer
-- AWS Cloud Infrastructure Engineer
-- Junior DevOps Engineer
-- Associate DevOps Engineer
-- Junior AWS DevOps Engineer
-- Associate AWS DevOps Engineer
-- Junior Cloud Engineer
-- Associate Cloud Engineer
-- Junior AWS Cloud Engineer
-- Associate AWS Cloud Engineer
-- Junior SRE
-- Associate SRE
-- Junior Site Reliability Engineer
-- Associate Site Reliability Engineer
-- DevOps Engineer L1
-- DevOps Engineer L2

@@ -16,7 +16,7 @@ class JobApplier:
         self,
         session_file: Path = Path("session.json"),
         profile_file: Path = Path("user_profile.yaml"),
-        resume_file: Path = Path("CV_Tarakananda.pdf"),
+        resume_file: Path = Path("CV_Tarakananda_Optimized.pdf"),
         match_threshold: float = None,
         max_days_old: int = 1,
     ):
@@ -28,7 +28,19 @@ class JobApplier:
         if match_threshold is None:
             match_threshold = self.profile.get("apply_threshold", 0.8) * 100
         self.match_threshold = match_threshold
+        
+        # Read new config options from profile
+        self.headless_mode = self.profile.get("headless_mode", True)
+        self.check_all_jobs = self.profile.get("check_all_jobs", True)
+        self.min_skill_match = self.profile.get("min_skill_match", 80)
         self.max_days_old = max_days_old
+        self.job_delay = self.profile.get("job_delay_seconds", 2)
+        
+        # Use profile's min_skill_match if not explicitly provided
+        if match_threshold is None:
+            match_threshold = self.profile.get("min_skill_match", 80)
+        self.match_threshold = match_threshold
+        
         self.collector = JobDataCollector()
         self.manual_collector = ManualApplyCollector()
 
@@ -206,6 +218,39 @@ class JobApplier:
             return exp_elem.inner_text().strip()
         return ""
 
+    def get_salary_from_card(self, card: Any) -> str:
+        """Extract structured salary range from job card."""
+        selectors = [
+            "[class*='salary']", ".salary", ".sal", ".salary-span",
+            "span:has-text('LPA')", "span:has-text('Lacs')",
+            "[class*='ctc']", "[class*='salary']",
+            ".salary-wrap", ".ctc-wrap"
+        ]
+        for sel in selectors:
+            elem = card.query_selector(sel)
+            if elem and elem.is_visible():
+                text = elem.inner_text().strip()
+                # Extract structured range: "12-15 LPA", "15-20 Lakhs", etc.
+                if any(kw in text.lower() for kw in ['lpa', 'lakh', 'lakhs', 'ctc']):
+                    return text
+        return "N/A"
+
+    def get_location_from_card(self, card: Any) -> str:
+        """Extract exact location from job card."""
+        selectors = [
+            "[class*='location']", ".location", ".locWdth", 
+            "[class*='loc']", ".loc-wrap",
+            "span:has-text('Hyderabad')", "span:has-text('Bengaluru')",
+            "span:has-text('Remote')", "span:has-text('Hybrid')",
+            "span:has-text('Chennai')", "span:has-text('Pune')",
+            "span:has-text('Mumbai')", "span:has-text('Delhi')"
+        ]
+        for sel in selectors:
+            elem = card.query_selector(sel)
+            if elem and elem.is_visible():
+                return elem.inner_text().strip()
+        return "N/A"
+
     def is_relevant_title(self, title: str) -> bool:
         relevant_keywords = ["devops", "cloud", "sre", "site reliability", "aws", "azure", "gcp",
                             "kubernetes", "k8s", "docker", "terraform", "ansible", "jenkins",
@@ -294,14 +339,14 @@ class JobApplier:
             pass
         return False
 
-    def _answer_application_question(self, page: Any, question: str) -> bool:
+    def _answer_application_question(self, container: Any, question: str) -> bool:
         """Try to answer an application question based on resume/profile."""
         question_lower = question.lower()
 
         # Check profile Q&A first
         for q, answer in self.profile_qa.items():
             if q in question_lower:
-                if self._fill_input(page, answer):
+                if self._fill_input(container, answer):
                     return True
 
         # Try to match from experience map (skill-specific years)
@@ -321,13 +366,13 @@ class JobApplier:
         for skill, exp in self.experience_map.items():
             # Direct match
             if skill in question_lower:
-                if self._fill_input(page, exp):
+                if self._fill_input(container, exp):
                     print(f"  Answered: {question} -> {exp}")
                     return True
             # Alias match
             for alias, target in skill_aliases.items():
                 if alias in question_lower and target == skill:
-                    if self._fill_input(page, exp):
+                    if self._fill_input(container, exp):
                         print(f"  Answered (alias): {question} -> {exp}")
                         return True
 
@@ -336,7 +381,7 @@ class JobApplier:
             for skill, exp in self.experience_map.items():
                 if skill in question_lower:
                     # Try text input first
-                    if self._fill_input(page, exp):
+                    if self._fill_input(container, exp):
                         print(f"  Answered (skill-specific): {question} -> {exp}")
                         return True
                     # Try radio button selection
@@ -344,24 +389,24 @@ class JobApplier:
                     years_match = re.search(r'(\d+)', exp)
                     if years_match:
                         years = int(years_match.group(1))
-                        if self._select_radio_by_years(page, years):
+                        if self._select_radio_by_years(container, years):
                             print(f"  Answered (radio): {question} -> {exp}")
                             return True
 
         # Check for common patterns
         if "notice period" in question_lower:
             notice = self.profile.get("notice_period_months", 3)
-            if self._fill_input(page, f"{notice} months"):
+            if self._fill_input(container, f"{notice} months"):
                 return True
 
         if "current ctc" in question_lower or "current salary" in question_lower:
             ctc = self.profile.get("current_ctc_lpa", 12)
-            if self._fill_input(page, f"{ctc} LPA"):
+            if self._fill_input(container, f"{ctc} LPA"):
                 return True
 
         if "expected ctc" in question_lower or "expected salary" in question_lower:
             ctc = self.profile.get("expected_ctc_lpa", 12)
-            if self._fill_input(page, f"{ctc} LPA"):
+            if self._fill_input(container, f"{ctc} LPA"):
                 return True
 
         if "total experience" in question_lower or "years of experience" in question_lower:
@@ -369,7 +414,7 @@ class JobApplier:
             skill_matched = False
             for skill, exp in self.experience_map.items():
                 if skill in question_lower:
-                    if self._fill_input(page, exp):
+                    if self._fill_input(container, exp):
                         print(f"  Answered: {question} -> {exp}")
                         return True
                     skill_matched = True
@@ -377,15 +422,15 @@ class JobApplier:
             # If no specific skill matched, use total experience
             if not skill_matched:
                 total_exp = self._calculate_total_experience()
-                if self._fill_input(page, f"{total_exp} years"):
+                if self._fill_input(container, f"{total_exp} years"):
                     return True
                 # Also try radio button selection for total experience
-                if self._select_radio_by_years(page, total_exp):
+                if self._select_radio_by_years(container, total_exp):
                     return True
 
         if "current company" in question_lower or "current employer" in question_lower:
             current = self._get_current_company()
-            if current and self._fill_input(page, current):
+            if current and self._fill_input(container, current):
                 return True
 
         return False
@@ -423,7 +468,7 @@ class JobApplier:
                 print(f"  Question found: {question_text[:150]}")
 
                 # Try to answer
-                answered = self._answer_application_question(page, question_text)
+                answered = self._answer_application_question(container, question_text)
 
                 if not answered:
                     # Check if it's a dropdown/select
@@ -478,7 +523,7 @@ class JobApplier:
                     if q_key not in processed_questions:
                         processed_questions.add(q_key)
                         print(f"  Field question: {combined_text[:150]}")
-                        answered = self._answer_application_question(page, combined_text)
+                        answered = self._answer_application_question(inp, combined_text)
                         if not answered:
                             self._save_unknown_question(combined_text)
                             all_answered = False
@@ -852,12 +897,11 @@ class JobApplier:
             "button:has-text('Continue')",
             "button:has-text('Submit')", 
             "button:has-text('Apply')",
-            "button:has-text('Save')",
             "button:has-text('Proceed')",
             "[class*='btn']:has-text('Next')", 
             "[class*='btn']:has-text('Continue')",
             "[class*='btn']:has-text('Submit')",
-            "[class*='btn']:has-text('Save')",
+            "[class*='btn']:has-text('Proceed')",
             "button[type='submit']",
         ]
         for sel in continue_selectors:
@@ -1259,8 +1303,8 @@ class JobApplier:
                     card_index += 1
                     continue
 
-                # Check if relevant title
-                if not self.is_relevant_title(title):
+                # Check if relevant title (only if check_all_jobs is False)
+                if not self.check_all_jobs and not self.is_relevant_title(title):
                     print(f"  [{card_index+1}] Skip (irrelevant): {title[:50]} | Posted: {posted}")
                     card_index += 1
                     continue
@@ -1317,6 +1361,10 @@ class JobApplier:
                     print(f"      Skills in JD: {job_skills[:10]}")
                     print(f"      Match: {match_pct:.1f}% | Matched: {matched} | Missing: {missing[:5]}")
 
+                    # Get salary and location from card
+                    salary = self.get_salary_from_card(card)
+                    location = self.get_location_from_card(card)
+
                     # Collect job data for output file
                     job_data = {
                         "role": keyword,
@@ -1325,6 +1373,8 @@ class JobApplier:
                         "experience": experience,
                         "posted_date": posted,
                         "url": url,
+                        "salary": salary,
+                        "location": location,
                         "jd_text": jd_text,
                         "jd_skills": job_skills,
                         "resume_skills": resume_skills,
@@ -1438,6 +1488,10 @@ class JobApplier:
 
                 card_index += 1
 
+                # Rate limiting delay between jobs
+                if self.job_delay > 0:
+                    page.wait_for_timeout(self.job_delay * 1000)
+
             except Exception as e:
                 print(f"  ✗ Error with card {card_index}: {e}")
                 card_index += 1
@@ -1462,10 +1516,14 @@ class JobApplier:
 
         with sync_playwright() as p:
             Stealth().use_sync(p)
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=self.headless_mode)
             context = browser.new_context()
             context.add_cookies(cookies)
             page = context.new_page()
+            
+            # Set longer timeout for headless mode
+            page.set_default_timeout(60000)
+            page.set_default_navigation_timeout(90000)
 
             try:
                 for keyword in keywords:
