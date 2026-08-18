@@ -1185,16 +1185,34 @@ class JobApplier:
         # Dismiss chatbot overlay if present on search page
         self._dismiss_chatbot_overlay(page)
 
-        # Apply filters ONCE
+        # Ensure NO tabs are open except the main search page
+        while len(context.pages) > 1:
+            try:
+                extra_page = context.pages[-1]
+                if extra_page != page:
+                    extra_page.close()
+            except Exception:
+                break
+
+        # Apply filters ONCE - location first, then sort by date
         self._apply_location_filters(page)
         self.sort_by_date(page)
+
+        # Verify sort is applied by checking first job date
+        page.wait_for_timeout(2000)
+        first_card = page.query_selector("[data-job-id], .jobTuple, .job-card")
+        if first_card:
+            posted_elem = first_card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
+            if posted_elem:
+                posted_text = posted_elem.inner_text().strip().lower()
+                print(f"  Verified first job posted: {posted_text}")
 
         # Dismiss chatbot again after filters (may reappear)
         self._dismiss_chatbot_overlay(page)
 
-        # Get initial job cards
+        # Get initial job cards AFTER filters and sort are applied
         cards = page.query_selector_all("[data-job-id], .jobTuple, .job-card")
-        print(f"Found {len(cards)} job cards")
+        print(f"Found {len(cards)} job cards after filters and sort")
 
         card_index = 0
         while processed < max_jobs and card_index < len(cards):
