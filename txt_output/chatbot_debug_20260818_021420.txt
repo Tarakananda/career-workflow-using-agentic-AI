@@ -1,3 +1,0 @@
-=== CHATBOT DEBUG: Potential sidebar elements ===
-
-=== END DEBUG ===
