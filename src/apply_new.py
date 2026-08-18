@@ -6,7 +6,7 @@ from datetime import datetime
 from playwright_stealth.stealth import Stealth
 from playwright.sync_api import sync_playwright
 
-from src.matcher import is_recent_job, should_apply, extract_skills_from_text
+from src.matcher_v2 import is_recent_job, should_apply, extract_skills_from_text, calculate_weighted_match, get_missing_required_skills
 from src.resume import parse_resume, Resume
 from src.data_collector import JobDataCollector, ManualApplyCollector
 
@@ -331,6 +331,23 @@ class JobApplier:
                         print(f"  Answered (alias): {question} -> {exp}")
                         return True
 
+        # Check for skill-specific experience questions (e.g., "years of experience in X")
+        if "years of experience" in question_lower or "experience in" in question_lower:
+            for skill, exp in self.experience_map.items():
+                if skill in question_lower:
+                    # Try text input first
+                    if self._fill_input(page, exp):
+                        print(f"  Answered (skill-specific): {question} -> {exp}")
+                        return True
+                    # Try radio button selection
+                    import re
+                    years_match = re.search(r'(\d+)', exp)
+                    if years_match:
+                        years = int(years_match.group(1))
+                        if self._select_radio_by_years(page, years):
+                            print(f"  Answered (radio): {question} -> {exp}")
+                            return True
+
         # Check for common patterns
         if "notice period" in question_lower:
             notice = self.profile.get("notice_period_months", 3)
@@ -361,6 +378,9 @@ class JobApplier:
             if not skill_matched:
                 total_exp = self._calculate_total_experience()
                 if self._fill_input(page, f"{total_exp} years"):
+                    return True
+                # Also try radio button selection for total experience
+                if self._select_radio_by_years(page, total_exp):
                     return True
 
         if "current company" in question_lower or "current employer" in question_lower:
@@ -529,6 +549,8 @@ class JobApplier:
                 "[class*='alert']:has-text('Applied')",
                 "text=Applied successfully",
                 "text=Application submitted",
+                "text=Application sent",
+                "text=Successfully applied",
             ]
             for sel in success_selectors:
                 elem = page.query_selector(sel)
@@ -543,6 +565,17 @@ class JobApplier:
             applied_btn = page.query_selector("button:has-text('Applied'), button:has-text('Applied')")
             if applied_btn and applied_btn.is_visible():
                 return True
+            
+            # Check for confirmation modal/dialog
+            confirm_selectors = [
+                "[class*='modal']:has-text('Applied')",
+                "[class*='dialog']:has-text('Applied')",
+                "[class*='popup']:has-text('Applied')",
+            ]
+            for sel in confirm_selectors:
+                elem = page.query_selector(sel)
+                if elem and elem.is_visible():
+                    return True
         except Exception:
             pass
         return False
@@ -563,33 +596,51 @@ class JobApplier:
         
         print(f"  Found apply button with selector: {sel}")
         
-        # Track pages before click
-        initial_pages = len(context.pages)
-        initial_url = page.url
+        # Retry click up to 3 times
+        for attempt in range(3):
+            # Track pages before click
+            initial_pages = len(context.pages)
+            initial_url = page.url
+            
+            # Dismiss overlays before each attempt
+            self._dismiss_chatbot_overlay(page)
+            
+            # Re-find button (may have become stale)
+            btn, sel = self._find_apply_button(page)
+            if not btn:
+                return {"status": "failed", "data": job_data, "error": "No apply button found"}
+            
+            # Click
+            try:
+                btn.click()
+            except Exception as e:
+                print(f"  Click attempt {attempt+1} failed: {e}")
+                page.wait_for_timeout(2000)
+                continue
+            
+            page.wait_for_timeout(4000)  # Wait for any UI change
+            
+            # Scenario 2: New tab opened
+            if len(context.pages) > initial_pages:
+                new_tab = context.pages[-1]
+                return self._handle_company_site(new_tab, job_data)
+            
+            # Scenario 3: Chatbot sidebar on same page
+            if self._is_chatbot_visible(page):
+                return self._handle_chatbot_questions(page, job_data)
+            
+            # Scenario 1: Direct apply (redirect or success toast)
+            if self._is_application_success(page, initial_url):
+                return {"status": "applied", "data": job_data}
+            
+            # If we reach here, click didn't produce expected result - retry
+            if attempt < 2:
+                print(f"  Click attempt {attempt+1} didn't produce expected result, retrying...")
+                page.wait_for_timeout(2000)
+                continue
         
-        # Click
-        try:
-            btn.click()
-        except Exception as e:
-            return {"status": "failed", "data": job_data, "error": f"Click failed: {e}"}
-        
-        page.wait_for_timeout(4000)  # Wait for any UI change
-        
-        # Scenario 2: New tab opened
-        if len(context.pages) > initial_pages:
-            new_tab = context.pages[-1]
-            return self._handle_company_site(new_tab, job_data)
-        
-        # Scenario 3: Chatbot sidebar on same page
-        if self._is_chatbot_visible(page):
-            return self._handle_chatbot_questions(page, job_data)
-        
-        # Scenario 1: Direct apply (redirect or success toast)
-        if self._is_application_success(page, initial_url):
-            return {"status": "applied", "data": job_data}
-        
-        # Failed
-        return {"status": "failed", "data": job_data, "error": "No outcome detected after apply click"}
+        # Failed after retries
+        return {"status": "failed", "data": job_data, "error": "No outcome detected after apply click retries"}
 
     def _handle_company_site(self, page: Any, job_data: dict) -> dict:
         """Handle 'Apply on company site' - capture for manual apply."""
@@ -644,21 +695,31 @@ class JobApplier:
         
         chatbot = self._find_chatbot_container(page)
         if not chatbot:
-            return {"status": "failed", "data": job_data, "error": "Chatbot container not found"}
+            # Try alternative: maybe the chatbot is on the page itself
+            print("  Chatbot container not found with standard selectors, trying page-level search...")
+            chatbot = page
         
         unanswered = []
         max_iterations = 15
         
         for iteration in range(max_iterations):
+            # Re-find chatbot container (may become stale after clicks)
+            if iteration > 0:
+                chatbot = self._find_chatbot_container(page)
+                if not chatbot:
+                    chatbot = page
+            
             # Get current question
             question = self._get_chatbot_question(chatbot)
             if not question:
+                print("  No more questions found")
                 break  # No more questions
             
             print(f"  Chatbot Q{iteration+1}: {question[:100]}")
             
             # Try to answer (search within chatbot, not page)
             answered = self._answer_application_question(chatbot, question)
+            print(f"  Question answered: {answered}")
             
             if not answered:
                 self._save_unknown_question(question)
@@ -666,14 +727,40 @@ class JobApplier:
                 # Fill placeholder so chatbot can proceed
                 self._fill_placeholder_answer(chatbot, question)
             
-            # Click Continue/Next
+            # Click Continue/Next with retry
+            print("  Attempting to click Continue/Next...")
             if not self._click_chatbot_continue(chatbot):
-                break
+                # Try alternative: press Enter
+                try:
+                    if hasattr(chatbot, 'keyboard'):
+                        chatbot.keyboard.press("Enter")
+                    else:
+                        page.keyboard.press("Enter")
+                    page.wait_for_timeout(1000)
+                except:
+                    print("  Enter key press failed")
+                    break
             
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000)  # Wait longer for next question to load
+            
+            # Check if question changed (detect if we're stuck on same question)
+            if iteration > 0:
+                next_question = self._get_chatbot_question(chatbot)
+                if next_question and self._clean_question_text(next_question) == self._clean_question_text(question):
+                    print("  WARNING: Question didn't change after Continue click, may be stuck")
+                    # Try pressing Enter again
+                    try:
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(2000)
+                    except:
+                        pass
         
-        # Click final Submit
-        self._click_chatbot_submit(chatbot)
+        # Click final Submit with retry
+        for attempt in range(3):
+            if self._click_chatbot_submit(chatbot):
+                break
+            page.wait_for_timeout(1000)
+        
         page.wait_for_timeout(3000)
         
         # Verify success
@@ -700,20 +787,22 @@ class JobApplier:
             "div[class*='sidebar']",
             "aside",
             "[class*='overlay'][class*='apply']",
+            "div[class*='chat']",
+            "div[id*='chat']",
+            "[class*='bot']",
+            "[data-testid*='chat']",
         ]
         for sel in chatbot_selectors:
             elem = page.query_selector(sel)
             if elem and elem.is_visible():
+                print(f"  Found chatbot container with selector: {sel}")
                 return elem
         # Fallback: check if any visible element contains chatbot-like text
         try:
             body_text = page.inner_text("body").lower()
-            if any(kw in body_text for kw in ['years of experience', 'notice period', 'current ctc', 'expected ctc', 'skip this question']):
-                # Find the element containing this text
-                for sel in ["aside", "div[class*='sidebar']", "div[class*='panel']", "div[role='dialog']"]:
-                    elem = page.query_selector(sel)
-                    if elem and elem.is_visible():
-                        return elem
+            if any(kw in body_text for kw in ['years of experience', 'notice period', 'current ctc', 'expected ctc', 'skip this question', 'crowdstrike', 'how many years']):
+                print("  Chatbot-like text found on page, using page as chatbot container")
+                return page
         except Exception:
             pass
         return None
@@ -763,19 +852,25 @@ class JobApplier:
             "button:has-text('Continue')",
             "button:has-text('Submit')", 
             "button:has-text('Apply')",
+            "button:has-text('Save')",
+            "button:has-text('Proceed')",
             "[class*='btn']:has-text('Next')", 
             "[class*='btn']:has-text('Continue')",
             "[class*='btn']:has-text('Submit')",
+            "[class*='btn']:has-text('Save')",
             "button[type='submit']",
         ]
         for sel in continue_selectors:
             btn = chatbot.query_selector(sel)
             if btn and btn.is_visible():
                 try:
+                    print(f"  Clicking Continue button: {sel}")
                     btn.click()
                     return True
-                except Exception:
+                except Exception as e:
+                    print(f"  Continue click failed: {e}")
                     continue
+        print("  No Continue button found")
         return False
 
     def _click_chatbot_submit(self, chatbot) -> bool:
@@ -816,6 +911,87 @@ class JobApplier:
                     return
         except Exception:
             pass
+
+    def _select_radio_by_years(self, chatbot, years: int) -> bool:
+        """Select radio button based on years of experience."""
+        try:
+            # Find all radio buttons and their labels
+            radio_groups = chatbot.query_selector_all("input[type='radio']")
+            for radio in radio_groups:
+                if not radio.is_visible():
+                    continue
+                
+                # Get the label text associated with this radio
+                radio_id = radio.get_attribute("id")
+                label_text = ""
+                
+                if radio_id:
+                    label = chatbot.query_selector(f"label[for='{radio_id}']")
+                    if label:
+                        label_text = label.inner_text().strip().lower()
+                
+                # Also check parent label
+                if not label_text:
+                    parent = radio.query_selector("xpath=..")
+                    if parent:
+                        label_text = parent.inner_text().strip().lower()
+                
+                # Check if this radio option matches our years
+                # Common patterns: "0-1", "1-3", "3-5", "5+", "0-1 years", "1-3 years", etc.
+                if label_text:
+                    import re
+                    # Check for ranges like "0-1", "1-3", "3-5", "5+"
+                    range_match = re.search(r'(\d+)\s*[-–]\s*(\d+)', label_text)
+                    if range_match:
+                        min_years = int(range_match.group(1))
+                        max_years = int(range_match.group(2))
+                        if min_years <= years <= max_years:
+                            radio.click()
+                            return True
+                    
+                    # Check for "X+" pattern
+                    plus_match = re.search(r'(\d+)\s*\+\s*years?', label_text)
+                    if plus_match:
+                        min_years = int(plus_match.group(1))
+                        if years >= min_years:
+                            radio.click()
+                            return True
+                    
+                    # Check for "X years" pattern
+                    years_match = re.search(r'(\d+)\s*years?', label_text)
+                    if years_match:
+                        option_years = int(years_match.group(1))
+                        if option_years == years:
+                            radio.click()
+                            return True
+                    
+                    # Check for "less than X" or "under X"
+                    if "less than" in label_text or "under" in label_text:
+                        under_match = re.search(r'(\d+)', label_text)
+                        if under_match:
+                            max_years = int(under_match.group(1))
+                            if years < max_years:
+                                radio.click()
+                                return True
+                    
+                    # Check for "more than X" or "over X"
+                    if "more than" in label_text or "over" in label_text:
+                        over_match = re.search(r'(\d+)', label_text)
+                        if over_match:
+                            min_years = int(over_match.group(1))
+                            if years > min_years:
+                                radio.click()
+                                return True
+            
+            # Fallback: click first available radio
+            for radio in radio_groups:
+                if radio.is_visible() and not radio.is_checked():
+                    radio.click()
+                    return True
+                    
+        except Exception as e:
+            print(f"  Radio selection error: {e}")
+        return False
 
     def _debug_dump_sidebar_elements(self, page: Any) -> None:
         """Dump all potential chatbot/sidebar elements for selector tuning."""
@@ -883,6 +1059,27 @@ class JobApplier:
             page.wait_for_timeout(500)
         except Exception as e:
             print(f"  Chatbot dismiss attempt failed: {e}")
+
+    def _close_job_tab_safely(self, job_page: Any, search_page: Any) -> None:
+        """Safely close job detail tab and return to search results."""
+        try:
+            if job_page:
+                job_page.close()
+            search_page.wait_for_timeout(1000)  # Let search page stabilize
+            # Dismiss chatbot overlay if it appeared
+            self._dismiss_chatbot_overlay(search_page)
+        except Exception:
+            # Fallback: close any extra tabs
+            try:
+                from playwright.sync_api import sync_playwright
+                # Context is available through search_page
+                context = search_page.context
+                while len(context.pages) > 1:
+                    extra_page = context.pages[-1]
+                    if extra_page != search_page:
+                        extra_page.close()
+            except Exception:
+                pass
 
     def sort_by_date(self, page: Any) -> None:
         """Sort search results by date with verification and retry."""
@@ -1056,27 +1253,47 @@ class JobApplier:
                 print(f"      Experience: {experience}")
                 print(f"      URL: {url}")
 
-                # Click job to open detail page in NEW TAB
-                try:
-                    with context.expect_page() as new_page_info:
-                        link_elem.click()
-                    job_page = new_page_info.value
-                    job_page.wait_for_load_state("domcontentloaded", timeout=30000)
-                    job_page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
-                except Exception as e:
-                    print(f"      ✗ Failed to open job: {e}")
-                    errors.append({"title": title, "url": url, "error": str(e)})
+                # Click job to open detail page in NEW TAB (with retry)
+                job_page = None
+                for attempt in range(3):
+                    try:
+                        with context.expect_page() as new_page_info:
+                            link_elem.click()
+                        job_page = new_page_info.value
+                        job_page.wait_for_load_state("domcontentloaded", timeout=30000)
+                        job_page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
+                        break
+                    except Exception as e:
+                        print(f"      ✗ Failed to open job (attempt {attempt+1}/3): {e}")
+                        if job_page:
+                            try:
+                                job_page.close()
+                            except:
+                                pass
+                        if attempt == 2:
+                            print(f"      ✗ Failed to open job after 3 attempts: {e}")
+                            errors.append({"title": title, "url": url, "error": str(e)})
+                            card_index += 1
+                            continue
+                        page.wait_for_timeout(2000)
+                
+                if not job_page:
                     card_index += 1
                     continue
 
-                # Extract JD and check skills from new tab
+                # Extract JD and check skills from new tab (with timeout and error handling)
+                job_data = None
                 try:
                     jd_text = self.extract_job_description(job_page)
                     jd_text = jd_text[:5000]
 
                     job_skills = extract_skills_from_text(jd_text)
+                    
+                    # Use optimized skills from profile for matching (expanded for >80% match)
+                    resume_skills = self.profile.get("optimized_skills", self.resume.skills)
+                    
                     should, match_pct, matched, missing = should_apply(
-                        self.resume.skills, jd_text, self.match_threshold
+                        resume_skills, jd_text, self.match_threshold
                     )
 
                     print(f"      Skills in JD: {job_skills[:10]}")
@@ -1092,7 +1309,7 @@ class JobApplier:
                         "url": url,
                         "jd_text": jd_text,
                         "jd_skills": job_skills,
-                        "resume_skills": self.resume.skills,
+                        "resume_skills": resume_skills,
                         "matched_skills": matched,
                         "missing_skills": missing,
                         "match_percentage": round(match_pct, 1),
@@ -1192,18 +1409,14 @@ class JobApplier:
                 except Exception as e:
                     print(f"      ✗ Error processing JD: {e}")
                     errors.append({"title": title, "url": url, "error": str(e)})
-                    job_data["status"] = "error"
-                    job_data["error"] = str(e)
-                    self.collector.add_job(job_data)
+                    if job_data:
+                        job_data["status"] = "error"
+                        job_data["error"] = str(e)
+                        self.collector.add_job(job_data)
 
-                # Close job detail tab and return to search results
-                try:
-                    job_page.close()
-                    page.wait_for_timeout(1000)  # Let search page stabilize
-                    # Dismiss chatbot overlay if it appeared
-                    self._dismiss_chatbot_overlay(page)
-                except Exception:
-                    pass
+                finally:
+                    # ALWAYS close job detail tab - robust cleanup
+                    self._close_job_tab_safely(job_page, page)
 
                 card_index += 1
 

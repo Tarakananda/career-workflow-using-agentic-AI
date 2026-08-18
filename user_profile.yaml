@@ -7,6 +7,112 @@ job_types:
 - WFH
 - On-site
 notice_period_months: 3
+optimized_skills:
+- python
+- go
+- golang
+- bash
+- shell
+- powershell
+- aws
+- azure
+- gcp
+- google cloud
+- docker
+- kubernetes
+- k8s
+- eks
+- aks
+- gke
+- helm
+- kustomize
+- helmfile
+- terraform
+- terragrunt
+- cloudformation
+- ansible
+- packer
+- jenkins
+- github actions
+- gitlab ci
+- azure devops
+- ci/cd
+- cicd
+- argocd
+- flux
+- flux v2
+- gitops
+- prometheus
+- grafana
+- loki
+- tempo
+- alertmanager
+- datadog
+- cloudwatch
+- trivy
+- sonarqube
+- vault
+- hashicorp vault
+- aws secrets manager
+- azure key vault
+- istio
+- linkerd
+- service mesh
+- ec2
+- s3
+- rds
+- vpc
+- lambda
+- ecs
+- fargate
+- rds
+- dynamodb
+- elasticache
+- elb
+- alb
+- nlb
+- route53
+- cloudfront
+- api gateway
+- iam
+- security
+- networking
+- linux
+- git
+- github
+- gitlab
+- bitbucket
+- jira
+- confluence
+- agile
+- scrum
+- python
+- go
+- boto3
+- azure sdk
+- gcp sdk
+- kubernetes client-go
+- observability
+- monitoring
+- sre
+- devops
+- infrastructure as code
+- iac
+- gitops
+- load balancer
+- scala
+- ec2
+- s3
+- rds
+- networking
+- security
+- iam
+- monitoring
+- observability
+- containerization
+- ci/cd
+- automation
+- crowdstrike
 platforms:
 - naukri
 - linkedin
@@ -22,6 +128,55 @@ questions:
 - answer: 'yes'
   question: 'Are you currently residing in Bengaluru, Karnataka or willing to relocate
     to Bengaluru, Karnataka?
+
+    Yes
+
+
+    No'
+- answer: 2 years
+  question: How many years of experience do you have in Crowdstrike?
+- answer: ''
+  question: 'How many years of experience do you have in Crowdstrike?
+
+    3
+
+    How many years of experience do you have in wiz?'
+- answer: ''
+  question: 'How many years of experience do you have in Crowdstrike?
+
+    3
+
+    How many years of experience do you have in wiz?
+
+    0
+
+    How many years of experience do you have in Cloud Security?'
+- answer: ''
+  question: 'How many years of experience do you have in Crowdstrike?
+
+    3
+
+    How many years of experience do you have in wiz?
+
+    0
+
+    How many years of experience do you have in Cloud Security?
+
+    3'
+- answer: ''
+  question: 'How many years of experience do you have in Crowdstrike?
+
+    3
+
+    How many years of experience do you have in wiz?
+
+    0
+
+    How many years of experience do you have in Cloud Security?
+
+    3
+
+    Are you currently residing in Hyderabad or willing to relocate to Hyderabad?
 
     Yes
 
