@@ -2,6 +2,7 @@
 """Main entry point for the Job Agent."""
 import sys
 import argparse
+import asyncio
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -11,7 +12,7 @@ from src.apply_new import JobApplier
 from src.ui import create_ui
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description="Job Application Agent")
     parser.add_argument("--max-jobs", type=int, default=5, help="Max jobs per role to process")
     parser.add_argument("--threshold", type=float, default=80.0, help="Skill match threshold %%")
@@ -28,7 +29,7 @@ def main():
 
     if args.search_only:
         search = JobSearch()
-        jobs = search.search_jobs()
+        jobs = await search.search_jobs()
         print(f"\nTotal jobs found: {len(jobs)}")
         for job in jobs:
             print(f"  {job['title'][:60]} | {job['company']} | {job['location']} | {job['experience']} | {job['posted_date']}")
@@ -42,7 +43,7 @@ def main():
         print("This version processes one role at a time, checking each job on the page.")
         return
 
-    result = applier.run(max_jobs_per_role=args.max_jobs)
+    result = await applier.run(max_jobs_per_role=args.max_jobs)
 
     # Final summary is handled by UI if enabled
     if args.no_ui:
@@ -63,4 +64,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

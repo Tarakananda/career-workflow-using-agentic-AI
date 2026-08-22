@@ -1,4 +1,4 @@
-apply_threshold: 0.8
+apply_threshold: 0.75
 auto_apply_enabled: true
 check_all_jobs: true
 current_ctc_lpa: 6.0
@@ -9,10 +9,13 @@ job_types:
 - Hybrid
 - WFH
 - On-site
+llm_model: gpt-4o-mini
 max_days_old: 1
-max_parallel_jobs: 1
-min_skill_match: 80
+max_parallel_jobs: 3
+min_skill_match: 75
+minimize_browser: true
 notice_period_months: 3
+openai_api_key: ''
 optimized_skills:
 - python
 - go
@@ -22,8 +25,6 @@ optimized_skills:
 - powershell
 - aws
 - azure
-- gcp
-- google cloud
 - docker
 - kubernetes
 - k8s
@@ -31,13 +32,11 @@ optimized_skills:
 - aks
 - gke
 - helm
-- kustomize
 - helmfile
 - terraform
 - terragrunt
 - cloudformation
 - ansible
-- packer
 - jenkins
 - github actions
 - gitlab ci
@@ -50,8 +49,6 @@ optimized_skills:
 - gitops
 - prometheus
 - grafana
-- loki
-- tempo
 - alertmanager
 - datadog
 - cloudwatch
@@ -62,8 +59,6 @@ optimized_skills:
 - aws secrets manager
 - azure key vault
 - istio
-- linkerd
-- service mesh
 - ec2
 - s3
 - rds
@@ -87,16 +82,7 @@ optimized_skills:
 - git
 - github
 - gitlab
-- bitbucket
-- jira
-- confluence
 - agile
-- scrum
-- python
-- go
-- boto3
-- azure sdk
-- gcp sdk
 - kubernetes client-go
 - observability
 - monitoring
@@ -106,19 +92,10 @@ optimized_skills:
 - iac
 - gitops
 - load balancer
-- scala
-- ec2
-- s3
-- rds
 - networking
 - security
-- iam
-- monitoring
-- observability
 - containerization
-- ci/cd
 - automation
-- crowdstrike
 platforms:
 - naukri
 - linkedin
@@ -129,121 +106,26 @@ preferred_locations:
 - Bengaluru
 - Hyderabad
 questions:
-- answer: 3 years
-  question: how many years of experience do you have in azure cloud?
-- answer: 'yes'
-  question: 'Are you currently residing in Bengaluru, Karnataka or willing to relocate
-    to Bengaluru, Karnataka?
-
-    Yes
-
-
-    No'
-- answer: 2 years
-  question: How many years of experience do you have in Crowdstrike?
 - answer: ''
-  question: 'How many years of experience do you have in Crowdstrike?
-
-    3
-
-    How many years of experience do you have in wiz?'
-- answer: ''
-  question: 'How many years of experience do you have in Crowdstrike?
-
-    3
-
-    How many years of experience do you have in wiz?
-
-    0
-
-    How many years of experience do you have in Cloud Security?'
-- answer: ''
-  question: 'How many years of experience do you have in Crowdstrike?
-
-    3
-
-    How many years of experience do you have in wiz?
-
-    0
-
-    How many years of experience do you have in Cloud Security?
-
-    3'
-- answer: ''
-  question: 'How many years of experience do you have in Crowdstrike?
-
-    3
-
-    How many years of experience do you have in wiz?
-
-    0
-
-    How many years of experience do you have in Cloud Security?
-
-    3
-
-    Are you currently residing in Hyderabad or willing to relocate to Hyderabad?
+  question: 'Are you holding any counter offer ?
 
     Yes
 
 
     No'
 - answer: ''
-  question: 'Are you currently living in or ready to relocate to Bengaluru ?
+  question: Junior AWS Python
+- answer: ''
+  question: 'Do you have hands-on experience in both Manual Testing and Automation
+    Testing?
 
     Yes
 
 
     No'
 - answer: ''
-  question: How many years of experience do you have in BarnOwl?
-- answer: ''
-  question: How many years of experience do you have in Gcp Cloud?
-- answer: ''
-  question: How many years of experience do you have in Python automation engineering?
-- answer: ''
-  question: 'How many years of experience do you have in Python automation engineering?
-
-    3'
-- answer: ''
-  question: 'How many years of experience do you have in Python automation engineering?
-
-    3
-
-    will you relocate to hyderabad?
-
-    years'
-- answer: ''
-  question: 'How many years of experience do you have in Python automation engineering?
-
-    3
-
-    will you relocate to hyderabad?
-
-    years
-
-    Please Mention your ex infy employee id'
-- answer: ''
-  question: 'How many years of experience do you have in Python automation engineering?
-
-    3
-
-    will you relocate to hyderabad?
-
-    years
-
-    Please Mention your ex infy employee id
-
-    no'
-- answer: ''
-  question: Shaping everyday experiences with innovation and sustainability
-- answer: ''
-  question: How many years of experience do you have in Cloud Platform?
-- answer: ''
-  question: How many year experience you have in Manual Testing?
-- answer: ''
-  question: How many years of experience do you have in Open Text Operations Bridge
-    Manager?
+  question: Are you ex-infosys employee ?if yes mention your infosys employee id if
+    not, write NA
 reject_keywords:
 - Python Developer
 - Java Developer
@@ -253,7 +135,37 @@ reject_keywords:
 - Data Engineer
 - Data Scientist
 - ML Engineer
+- Data Analyst
+- Business Analyst
+- QA Engineer
+- Test Engineer
+- Support Engineer
+- Network Engineer
+- Security Engineer
+- Sales Engineer
+- Project Manager
+- Product Manager
+- Scrum Master
+- Architect
+- Team Lead
+- Manager
 salary_max: 2500000
 salary_min: 1000000
 strict_roles:
-- Cloud & DevOps Engineer
+- AWS DevOps Engineer
+- Azure DevOps Engineer
+- DevOps Engineer
+- AWS Cloud Engineer
+- Azure Cloud Engineer
+- Kubernetes Administrator
+- Site Reliability Engineer
+- SRE
+- Platform Engineer
+- Cloud Engineer
+- Infrastructure Engineer
+- AWS Architect
+- Azure Architect
+- Cloud Architect
+- DevSecOps Engineer
+- Kubernetes Engineer
+- Container Platform Engineer

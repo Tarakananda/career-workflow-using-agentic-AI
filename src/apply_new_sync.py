@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
-"""Async Job Applier with Playwright async API for parallel processing."""
 from pathlib import Path
 from typing import Any, Optional
 import yaml
 from datetime import datetime
-import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import os
 
-from playwright_stealth import Stealth
-from playwright.async_api import async_playwright
+from playwright_stealth.stealth import Stealth
+from playwright.sync_api import sync_playwright
 
 from src.matcher_improved import should_apply_improved as should_apply
 from src.matcher_v2 import is_recent_job, extract_skills_from_text
@@ -66,11 +65,11 @@ class JobApplier:
 
         # Load user profile Q&A for unknown questions
         self.profile_qa = self._load_profile_qa()
-
+        
         # Initialize LLM-based skill extractor and chatbot answerer
         print("  Initializing LLM skill extractor...")
         self.skill_inventory = self._build_skill_inventory()
-
+        
         self.chatbot_answerer = create_chatbot_answerer(
             skill_inventory=self.skill_inventory,
             profile_qa=self.profile_qa,
@@ -82,9 +81,11 @@ class JobApplier:
         # Chatbot debug flag
         self._chatbot_debug_done = False
         
-        # Thread safety for parallel processing (not needed in async)
-        self._browser = None
+        # Thread safety for parallel processing
+        self._browser_lock = threading.Lock()
         self._context = None
+        self._browser = None
+        self._playwright = None
 
     def _build_experience_map(self) -> dict[str, str]:
         """Build a map of skill -> years of experience from resume."""
@@ -176,30 +177,29 @@ class JobApplier:
         question = question.strip()
         if not question:
             return
-        
+
         # Clean question before checking/saving
         clean_question = self._clean_question_text(question)
-        
+
         # Check if already exists (using cleaned version)
         for item in self.profile.get("questions", []):
             if isinstance(item, dict) and self._clean_question_text(item.get("question", "")) == clean_question:
                 return
-        
+
         if "questions" not in self.profile:
             self.profile["questions"] = []
-        
+
         self.profile["questions"].append({
             "question": question,  # Save original for reference
             "answer": ""  # User needs to fill this
         })
-        
+
         with open("user_profile.yaml", "w") as f:
             yaml.dump(self.profile, f, default_flow_style=False)
-        
+
         print(f"  ⚠ Unknown question saved to user_profile.yaml: {clean_question}")
 
-    async def load_session(self) -> list[dict[str, Any]] | None:
-        """Load session cookies from file."""
+    def load_session(self) -> list[dict[str, Any]] | None:
         if not self.session_file.exists():
             return None
         import json
@@ -207,9 +207,9 @@ class JobApplier:
             cookies = json.load(fh)
         return cookies if isinstance(cookies, list) and len(cookies) > 0 else None
 
-    async def extract_job_description(self, page: Any) -> str:
+    def extract_job_description(self, page: Any) -> str:
         """Extract full job description from job detail page."""
-        await page.wait_for_timeout(2000)
+        page.wait_for_timeout(2000)
 
         selectors = [
             "[class*='jd-container']",
@@ -225,10 +225,9 @@ class JobApplier:
         ]
 
         for sel in selectors:
-            elem = await page.query_selector(sel)
+            elem = page.query_selector(sel)
             if elem:
-                text = await elem.inner_text()
-                text = text.strip()
+                text = elem.inner_text().strip()
                 if len(text) > 100:
                     return text
 
@@ -240,37 +239,33 @@ class JobApplier:
         ]
 
         for sel in main_selectors:
-            main = await page.query_selector(sel)
+            main = page.query_selector(sel)
             if main:
-                text = await main.inner_text()
-                text = text.strip()
+                text = main.inner_text().strip()
                 if len(text) > 200:
                     return text
 
-        return await page.inner_text("body")
+        return page.inner_text("body")
 
-    async def get_posted_date_from_card(self, card: Any) -> str:
-        """Get posted date from job card."""
-        posted_elem = await card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
+    def get_posted_date_from_card(self, card: Any) -> str:
+        posted_elem = card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
         if posted_elem:
-            return (await posted_elem.inner_text()).strip()
+            return posted_elem.inner_text().strip()
         return ""
 
-    async def get_company_from_card(self, card: Any) -> str:
-        """Get company from job card."""
-        company_elem = await card.query_selector("a.company, a[class*='company'], .companyName, .subTitle")
+    def get_company_from_card(self, card: Any) -> str:
+        company_elem = card.query_selector("a.company, a[class*='company'], .companyName, .subTitle")
         if company_elem:
-            return (await company_elem.inner_text()).strip()
+            return company_elem.inner_text().strip()
         return ""
 
-    async def get_experience_from_card(self, card: Any) -> str:
-        """Get experience from job card."""
-        exp_elem = await card.query_selector(".exp, [class*='exp'], .experience, .expwdth")
+    def get_experience_from_card(self, card: Any) -> str:
+        exp_elem = card.query_selector(".exp, [class*='exp'], .experience, .expwdth")
         if exp_elem:
-            return (await exp_elem.inner_text()).strip()
+            return exp_elem.inner_text().strip()
         return ""
 
-    async def get_salary_from_card(self, card: Any) -> str:
+    def get_salary_from_card(self, card: Any) -> str:
         """Extract structured salary range from job card."""
         selectors = [
             "[class*='salary']", ".salary", ".sal", ".salary-span",
@@ -279,16 +274,15 @@ class JobApplier:
             ".salary-wrap", ".ctc-wrap"
         ]
         for sel in selectors:
-            elem = await card.query_selector(sel)
-            if elem and await elem.is_visible():
-                text = await elem.inner_text()
-                text = text.strip()
+            elem = card.query_selector(sel)
+            if elem and elem.is_visible():
+                text = elem.inner_text().strip()
                 # Extract structured range: "12-15 LPA", "15-20 Lakhs", etc.
                 if any(kw in text.lower() for kw in ['lpa', 'lakh', 'lakhs', 'ctc']):
                     return text
         return "N/A"
 
-    async def get_location_from_card(self, card: Any) -> str:
+    def get_location_from_card(self, card: Any) -> str:
         """Extract exact location from job card."""
         selectors = [
             "[class*='location']", ".location", ".locWdth", 
@@ -299,13 +293,12 @@ class JobApplier:
             "span:has-text('Mumbai')", "span:has-text('Delhi')"
         ]
         for sel in selectors:
-            elem = await card.query_selector(sel)
-            if elem and await elem.is_visible():
-                return (await elem.inner_text()).strip()
+            elem = card.query_selector(sel)
+            if elem and elem.is_visible():
+                return elem.inner_text().strip()
         return "N/A"
 
     def is_relevant_title(self, title: str) -> bool:
-        """Check if job title is relevant based on keywords."""
         relevant_keywords = ["devops", "cloud", "sre", "site reliability", "aws", "azure", "gcp",
                             "kubernetes", "k8s", "docker", "terraform", "ansible", "jenkins",
                             "ci/cd", "infrastructure", "platform", "reliability", "observability",
@@ -336,20 +329,19 @@ class JobApplier:
 
         return False
 
-    async def _fill_input(self, container: Any, value: str) -> bool:
+    def _fill_input(self, container: Any, value: str) -> bool:
         """Fill visible input/textarea with value, or select radio/checkbox within container."""
         try:
             # First try text inputs
-            input_elem = await container.query_selector("input[type='text'], textarea, input:not([type])")
-            if input_elem and await input_elem.is_visible():
-                await input_elem.fill(value)
+            input_elem = container.query_selector("input[type='text'], textarea, input:not([type])")
+            if input_elem and input_elem.is_visible():
+                input_elem.fill(value)
                 return True
-            
             # Try to find any visible input
-            inputs = await container.query_selector_all("input[type='text'], textarea, input:not([type])")
+            inputs = container.query_selector_all("input[type='text'], textarea, input:not([type])")
             for inp in inputs:
-                if await inp.is_visible():
-                    await inp.fill(value)
+                if inp.is_visible():
+                    inp.fill(value)
                     return True
             
             # Try radio buttons - match value to option text
@@ -360,35 +352,33 @@ class JobApplier:
             target_years = int(years_match.group(1)) if years_match else None
             
             # Look for radio buttons with year ranges
-            radio_options = await container.query_selector_all("input[type='radio'], label[class*='radio'], div[class*='radio']")
+            radio_options = container.query_selector_all("input[type='radio'], label[class*='radio'], div[class*='radio']")
             for opt in radio_options:
-                text = (await opt.inner_text()).strip().lower()
+                text = opt.inner_text().strip().lower()
                 if target_years is not None:
                     # Check if option text contains the target year range
                     # e.g., "3-5 years", "3 years", "2-3", "3+"
                     if f"{target_years}" in text and ("year" in text or "yr" in text):
                         # Click the radio button or its label
-                        if await opt.get_attribute("type") == "radio":
-                            await opt.click()
+                        if opt.get_attribute("type") == "radio":
+                            opt.click()
                         else:
                             # Try to find input inside label
-                            radio_input = await opt.query_selector("input[type='radio']")
+                            radio_input = opt.query_selector("input[type='radio']")
                             if radio_input:
-                                await radio_input.click()
+                                radio_input.click()
                             else:
-                                await opt.click()
-                        if hasattr(container, 'page'):
-                            await container.page.wait_for_timeout(500)
+                                opt.click()
+                        container.page.wait_for_timeout(500) if hasattr(container, 'page') else None
                         return True
             
             # Try checkboxes for yes/no questions
             if value_lower in ['yes', 'true', '1']:
-                checkboxes = await container.query_selector_all("input[type='checkbox']")
+                checkboxes = container.query_selector_all("input[type='checkbox']")
                 for cb in checkboxes:
-                    if await cb.is_visible() and not await cb.is_checked():
-                        await cb.click()
-                        if hasattr(container, 'page'):
-                            await container.page.wait_for_timeout(500)
+                    if cb.is_visible() and not cb.is_checked():
+                        cb.click()
+                        container.page.wait_for_timeout(500) if hasattr(container, 'page') else None
                         return True
             
         except Exception as e:
@@ -396,14 +386,14 @@ class JobApplier:
             pass
         return False
 
-    async def _answer_application_question(self, container: Any, question: str) -> bool:
+    def _answer_application_question(self, container: Any, question: str) -> bool:
         """Try to answer an application question based on resume/profile."""
         question_lower = question.lower()
 
         # Check profile Q&A first
         for q, answer in self.profile_qa.items():
             if q in question_lower:
-                if await self._fill_input(container, answer):
+                if self._fill_input(container, answer):
                     return True
 
         # Try to match from experience map (skill-specific years)
@@ -423,13 +413,13 @@ class JobApplier:
         for skill, exp in self.experience_map.items():
             # Direct match
             if skill in question_lower:
-                if await self._fill_input(container, exp):
+                if self._fill_input(container, exp):
                     print(f"  Answered: {question} -> {exp}")
                     return True
             # Alias match
             for alias, target in skill_aliases.items():
                 if alias in question_lower and target == skill:
-                    if await self._fill_input(container, exp):
+                    if self._fill_input(container, exp):
                         print(f"  Answered (alias): {question} -> {exp}")
                         return True
 
@@ -438,7 +428,7 @@ class JobApplier:
             for skill, exp in self.experience_map.items():
                 if skill in question_lower:
                     # Try text input first
-                    if await self._fill_input(container, exp):
+                    if self._fill_input(container, exp):
                         print(f"  Answered (skill-specific): {question} -> {exp}")
                         return True
                     # Try radio button selection
@@ -446,24 +436,24 @@ class JobApplier:
                     years_match = re.search(r'(\d+)', exp)
                     if years_match:
                         years = int(years_match.group(1))
-                        if await self._select_radio_by_years(container, years):
+                        if self._select_radio_by_years(container, years):
                             print(f"  Answered (radio): {question} -> {exp}")
                             return True
 
         # Check for common patterns
         if "notice period" in question_lower:
             notice = self.profile.get("notice_period_months", 3)
-            if await self._fill_input(container, f"{notice} months"):
+            if self._fill_input(container, f"{notice} months"):
                 return True
 
         if "current ctc" in question_lower or "current salary" in question_lower:
             ctc = self.profile.get("current_ctc_lpa", 12)
-            if await self._fill_input(container, f"{ctc} LPA"):
+            if self._fill_input(container, f"{ctc} LPA"):
                 return True
 
         if "expected ctc" in question_lower or "expected salary" in question_lower:
             ctc = self.profile.get("expected_ctc_lpa", 12)
-            if await self._fill_input(container, f"{ctc} LPA"):
+            if self._fill_input(container, f"{ctc} LPA"):
                 return True
 
         if "total experience" in question_lower or "years of experience" in question_lower:
@@ -471,7 +461,7 @@ class JobApplier:
             skill_matched = False
             for skill, exp in self.experience_map.items():
                 if skill in question_lower:
-                    if await self._fill_input(container, exp):
+                    if self._fill_input(container, exp):
                         print(f"  Answered: {question} -> {exp}")
                         return True
                     skill_matched = True
@@ -479,32 +469,32 @@ class JobApplier:
             # If no specific skill matched, use total experience
             if not skill_matched:
                 total_exp = self._calculate_total_experience()
-                if await self._fill_input(container, f"{total_exp} years"):
+                if self._fill_input(container, f"{total_exp} years"):
                     return True
                 # Also try radio button selection for total experience
-                if await self._select_radio_by_years(container, total_exp):
+                if self._select_radio_by_years(container, total_exp):
                     return True
 
         if "current company" in question_lower or "current employer" in question_lower:
             current = self._get_current_company()
-            if current and await self._fill_input(container, current):
+            if current and self._fill_input(container, current):
                 return True
 
         return False
 
-    async def _handle_application_form(self, page: Any) -> bool:
+    def _handle_application_form(self, page: Any) -> bool:
         """Handle application form questions after clicking apply."""
-        await page.wait_for_timeout(5000)
+        page.wait_for_timeout(5000)
 
         # Look for question containers - broader search
-        question_containers = await page.query_selector_all(
+        question_containers = page.query_selector_all(
             "[class*='question'], [class*='form-field'], [class*='applicant-question'], "
             ".question-wrapper, .form-group, [data-testid*='question'], "
             "label, .field-label, .question-label"
         )
 
         # Also get all visible input fields with labels
-        input_fields = await page.query_selector_all("input[type='text'], input[type='number'], input:not([type]), textarea, select")
+        input_fields = page.query_selector_all("input[type='text'], input[type='number'], input:not([type]), textarea, select")
 
         all_answered = True
         processed_questions = set()
@@ -512,8 +502,7 @@ class JobApplier:
         # Process question containers
         for container in question_containers:
             try:
-                question_text = await container.inner_text()
-                question_text = question_text.strip()
+                question_text = container.inner_text().strip()
                 if not question_text or len(question_text) < 5 or len(question_text) > 500:
                     continue
 
@@ -526,21 +515,21 @@ class JobApplier:
                 print(f"  Question found: {question_text[:150]}")
 
                 # Try to answer
-                answered = await self._answer_application_question(container, question_text)
+                answered = self._answer_application_question(container, question_text)
 
                 if not answered:
                     # Check if it's a dropdown/select
-                    select_elem = await container.query_selector("select")
+                    select_elem = container.query_selector("select")
                     if select_elem:
-                        options = await select_elem.query_selector_all("option")
+                        options = select_elem.query_selector_all("option")
                         for opt in options:
-                            if await opt.get_attribute("value"):
-                                await select_elem.select_option(await opt.get_attribute("value"))
+                            if opt.get_attribute("value"):
+                                select_elem.select_option(opt.get_attribute("value"))
                                 answered = True
                                 break
 
                     if not answered:
-                        await self._save_unknown_question(question_text)
+                        self._save_unknown_question(question_text)
                         all_answered = False
                         print(f"  ⚠ Could not answer: {question_text[:100]}")
 
@@ -550,31 +539,29 @@ class JobApplier:
         # Also check input fields with nearby labels
         for inp in input_fields:
             try:
-                if not await inp.is_visible():
+                if not inp.is_visible():
                     continue
 
                 # Try to find associated label
-                inp_id = await inp.get_attribute("id")
+                inp_id = inp.get_attribute("id")
                 label_text = ""
 
                 if inp_id:
-                    label = await page.query_selector(f"label[for='{inp_id}']")
+                    label = page.query_selector(f"label[for='{inp_id}']")
                     if label:
-                        label_text = await label.inner_text()
-                        label_text = label_text.strip()
+                        label_text = label.inner_text().strip()
 
                 # Check placeholder
-                placeholder = await inp.get_attribute("placeholder") or ""
+                placeholder = inp.get_attribute("placeholder") or ""
 
                 # Check aria-label
-                aria_label = await inp.get_attribute("aria-label") or ""
+                aria_label = inp.get_attribute("aria-label") or ""
 
                 # Check parent label
                 if not label_text:
-                    parent = await inp.query_selector("xpath=..")
+                    parent = inp.query_selector("xpath=..")
                     if parent:
-                        label_text = await parent.inner_text()
-                        label_text = label_text.strip()
+                        label_text = parent.inner_text().strip()
 
                 combined_text = f"{label_text} {placeholder} {aria_label}".strip()
 
@@ -583,9 +570,9 @@ class JobApplier:
                     if q_key not in processed_questions:
                         processed_questions.add(q_key)
                         print(f"  Field question: {combined_text[:150]}")
-                        answered = await self._answer_application_question(inp, combined_text)
+                        answered = self._answer_application_question(inp, combined_text)
                         if not answered:
-                            await self._save_unknown_question(combined_text)
+                            self._save_unknown_question(combined_text)
                             all_answered = False
                             print(f"  ⚠ Could not answer field: {combined_text[:100]}")
 
@@ -593,18 +580,18 @@ class JobApplier:
                 print(f"  Error handling field: {e}")
 
         # Click submit/continue if available
-        submit_btn = await page.query_selector(
+        submit_btn = page.query_selector(
             "button:has-text('Submit'), button:has-text('Continue'), "
             "button:has-text('Next'), button[type='submit'], "
             "[class*='submit'], [class*='continue']"
         )
-        if submit_btn and await submit_btn.is_visible():
-            await submit_btn.click()
-            await page.wait_for_timeout(3000)
+        if submit_btn and submit_btn.is_visible():
+            submit_btn.click()
+            page.wait_for_timeout(3000)
 
         return all_answered
 
-    async def _find_apply_button(self, page: Any):
+    def _find_apply_button(self, page: Any):
         """Find the first visible apply button."""
         apply_selectors = [
             "button:has-text('Apply on company site')",
@@ -621,12 +608,12 @@ class JobApplier:
             "button.company-site-button",
         ]
         for sel in apply_selectors:
-            btn = await page.query_selector(sel)
-            if btn and await btn.is_visible():
+            btn = page.query_selector(sel)
+            if btn and btn.is_visible():
                 return btn, sel
         return None, None
 
-    async def _is_chatbot_visible(self, page: Any) -> bool:
+    def _is_chatbot_visible(self, page: Any) -> bool:
         """Check if chatbot sidebar is visible."""
         chatbot_selectors = [
             "[class*='chatbot']",
@@ -638,12 +625,12 @@ class JobApplier:
             "div[id*='chatbot']",
         ]
         for sel in chatbot_selectors:
-            elem = await page.query_selector(sel)
-            if elem and await elem.is_visible():
+            elem = page.query_selector(sel)
+            if elem and elem.is_visible():
                 return True
         return False
 
-    async def _is_application_success(self, page: Any, initial_url: str) -> bool:
+    def _is_application_success(self, page: Any, initial_url: str) -> bool:
         """Check if application was successful (toast, redirect, success message)."""
         try:
             # Check for success toast/message
@@ -658,8 +645,8 @@ class JobApplier:
                 "text=Successfully applied",
             ]
             for sel in success_selectors:
-                elem = await page.query_selector(sel)
-                if elem and await elem.is_visible():
+                elem = page.query_selector(sel)
+                if elem and elem.is_visible():
                     return True
             
             # Check for URL change (redirect to applied page)
@@ -667,8 +654,8 @@ class JobApplier:
                 return True
             
             # Check for "Applied" button state change
-            applied_btn = await page.query_selector("button:has-text('Applied'), button:has-text('Applied')")
-            if applied_btn and await applied_btn.is_visible():
+            applied_btn = page.query_selector("button:has-text('Applied'), button:has-text('Applied')")
+            if applied_btn and applied_btn.is_visible():
                 return True
             
             # Check for confirmation modal/dialog
@@ -678,24 +665,24 @@ class JobApplier:
                 "[class*='popup']:has-text('Applied')",
             ]
             for sel in confirm_selectors:
-                elem = await page.query_selector(sel)
-                if elem and await elem.is_visible():
+                elem = page.query_selector(sel)
+                if elem and elem.is_visible():
                     return True
         except Exception:
             pass
         return False
 
-    async def click_apply(self, page: Any, context: Any, job_data: dict) -> dict:
+    def click_apply(self, page: Any, context: Any, job_data: dict) -> dict:
         """
         Click apply and detect which of 3 scenarios occurs.
         Returns: {"status": "applied"|"company_site"|"chatbot"|"failed", 
                   "data": job_data, "unanswered": [...], "error": "..."}
         """
         # Dismiss overlays
-        await self._dismiss_chatbot_overlay(page)
+        self._dismiss_chatbot_overlay(page)
         
         # Find apply button
-        btn, sel = await self._find_apply_button(page)
+        btn, sel = self._find_apply_button(page)
         if not btn:
             return {"status": "failed", "data": job_data, "error": "No apply button found"}
         
@@ -708,49 +695,49 @@ class JobApplier:
             initial_url = page.url
             
             # Dismiss overlays before each attempt
-            await self._dismiss_chatbot_overlay(page)
+            self._dismiss_chatbot_overlay(page)
             
             # Re-find button (may have become stale)
-            btn, sel = await self._find_apply_button(page)
+            btn, sel = self._find_apply_button(page)
             if not btn:
                 return {"status": "failed", "data": job_data, "error": "No apply button found"}
             
             # Click
             try:
-                await btn.click()
+                btn.click()
             except Exception as e:
                 print(f"  Click attempt {attempt+1} failed: {e}")
-                await page.wait_for_timeout(2000)
+                page.wait_for_timeout(2000)
                 continue
             
-            await page.wait_for_timeout(4000)  # Wait for any UI change
+            page.wait_for_timeout(4000)  # Wait for any UI change
             
             # Scenario 2: New tab opened
             if len(context.pages) > initial_pages:
                 new_tab = context.pages[-1]
-                return await self._handle_company_site(new_tab, job_data)
+                return self._handle_company_site(new_tab, job_data)
             
             # Scenario 3: Chatbot sidebar on same page
-            if await self._is_chatbot_visible(page):
-                return await self._handle_chatbot_questions(page, job_data)
+            if self._is_chatbot_visible(page):
+                return self._handle_chatbot_questions(page, job_data)
             
             # Scenario 1: Direct apply (redirect or success toast)
-            if await self._is_application_success(page, initial_url):
+            if self._is_application_success(page, initial_url):
                 return {"status": "applied", "data": job_data}
             
             # If we reach here, click didn't produce expected result - retry
             if attempt < 2:
                 print(f"  Click attempt {attempt+1} didn't produce expected result, retrying...")
-                await page.wait_for_timeout(2000)
+                page.wait_for_timeout(2000)
                 continue
         
         # Failed after retries
         return {"status": "failed", "data": job_data, "error": "No outcome detected after apply click retries"}
 
-    async def _handle_company_site(self, page: Any, job_data: dict) -> dict:
+    def _handle_company_site(self, page: Any, job_data: dict) -> dict:
         """Handle 'Apply on company site' - capture for manual apply."""
         try:
-            await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            page.wait_for_load_state("domcontentloaded", timeout=30000)
         except Exception:
             pass
         
@@ -774,7 +761,7 @@ class JobApplier:
         }
         
         self.manual_collector.add_job(manual_record)
-        await page.close()
+        page.close()
         
         return {"status": "company_site", "data": manual_record}
 
@@ -789,7 +776,7 @@ class JobApplier:
                 return loc.title()
         return ""
 
-    async def _handle_chatbot_questions(self, page: Any, job_data: dict) -> dict:
+    def _handle_chatbot_questions(self, page: Any, job_data: dict) -> dict:
         """Handle chatbot sidebar questions on job detail page.
         
         Flow based on screenshots:
@@ -800,14 +787,14 @@ class JobApplier:
         5. Repeat for all questions
         6. "Applied" confirmation appears
         """
-        await page.wait_for_timeout(3000)
+        page.wait_for_timeout(3000)
         
         # Debug dump on first encounter
         if not self._chatbot_debug_done:
-            await self._debug_dump_sidebar_elements(page)
+            self._debug_dump_sidebar_elements(page)
             self._chatbot_debug_done = True
         
-        chatbot = await self._find_chatbot_container(page)
+        chatbot = self._find_chatbot_container(page)
         if not chatbot:
             if self.ui:
                 self.ui.console.print("  [Chatbot] Container not found with standard selectors, trying page-level search...")
@@ -821,12 +808,12 @@ class JobApplier:
         for iteration in range(max_iterations):
             # Re-find chatbot container (may become stale after clicks)
             if iteration > 0:
-                chatbot = await self._find_chatbot_container(page)
+                chatbot = self._find_chatbot_container(page)
                 if not chatbot:
                     chatbot = page
             
             # Get current question
-            question = await self._get_chatbot_question(chatbot)
+            question = self._get_chatbot_question(chatbot)
             if not question:
                 if self.ui:
                     self.ui.console.print("  [Chatbot] No more questions found")
@@ -840,16 +827,16 @@ class JobApplier:
                 print(f"  Chatbot Q{iteration+1}: {question[:100]}")
             
             # Try to answer (search within chatbot, not page)
-            answered = await self.chatbot_answerer.answer_question(question, chatbot, page)
+            answered = self.chatbot_answerer.answer_question(question, chatbot, page)
             
             if not answered:
-                await self._save_unknown_question(question)
+                self._save_unknown_question(question)
                 unanswered.append(question)
                 # Fill placeholder so chatbot can proceed
-                await self._fill_placeholder_answer(chatbot, question)
+                self._fill_placeholder_answer(chatbot, question)
             
             # Wait a bit for Save button to enable after radio selection
-            await page.wait_for_timeout(2000)
+            page.wait_for_timeout(2000)
             
             # Click "Save" button (not Continue) - this is what the screenshots show
             if self.ui:
@@ -857,14 +844,14 @@ class JobApplier:
             else:
                 print("  Attempting to click Save...")
             
-            if not await self._click_chatbot_save(chatbot, page):
+            if not self._click_chatbot_save(chatbot, page):
                 if self.ui:
                     self.ui.console.print("  [Chatbot] Save button not found, trying Enter...")
                 else:
                     print("  Save button not found, trying Enter...")
                 try:
-                    await page.keyboard.press("Enter")
-                    await page.wait_for_timeout(1000)
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(1000)
                 except:
                     if self.ui:
                         self.ui.console.print("  [Chatbot] Enter key press failed")
@@ -872,12 +859,12 @@ class JobApplier:
                         print("  Enter key press failed")
                     break
             
-            await page.wait_for_timeout(3000)  # Wait for next question to load
+            page.wait_for_timeout(3000)  # Wait for next question to load
             
             # Check if question changed (detect if we're stuck on same question)
             if iteration > 0:
-                next_question = await self._get_chatbot_question(chatbot)
-                if next_question and self._clean_question_text(await next_question) == self._clean_question_text(question):
+                next_question = self._get_chatbot_question(chatbot)
+                if next_question and self._clean_question_text(next_question) == self._clean_question_text(question):
                     if self.ui:
                         self.ui.console.print("  [Chatbot] WARNING: Question didn't change after Save click, may be stuck")
                     else:
@@ -903,16 +890,16 @@ class JobApplier:
                     
                     # Try pressing Enter again
                     try:
-                        await page.keyboard.press("Enter")
-                        await page.wait_for_timeout(2000)
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(2000)
                     except:
                         pass
         
         # After all questions, verify "Applied" success
-        await page.wait_for_timeout(3000)
+        page.wait_for_timeout(3000)
         
         # Verify success - check for "Applied" text or success indicators
-        if await self._is_application_success(page, page.url):
+        if self._is_application_success(page, page.url):
             if unanswered:
                 return {"status": "chatbot_partial", "data": job_data, "unanswered": unanswered}
             return {"status": "applied", "data": job_data}
@@ -920,7 +907,7 @@ class JobApplier:
         return {"status": "chatbot_failed", "data": job_data, "unanswered": unanswered, 
                 "error": "Chatbot did not complete successfully"}
 
-    async def _click_chatbot_save(self, chatbot, page: Any = None) -> bool:
+    def _click_chatbot_save(self, chatbot, page: Any = None) -> bool:
         """Click Save button in chatbot dialog. Searches both chatbot container and full page.
         Waits for form submission and verifies next question appears."""
         save_selectors = [
@@ -941,21 +928,21 @@ class JobApplier:
         
         for ctx in search_contexts:
             for sel in save_selectors:
-                btn = await ctx.query_selector(sel)
-                if btn and await btn.is_visible():
+                btn = ctx.query_selector(sel)
+                if btn and btn.is_visible():
                     try:
                         # Check if button is disabled
-                        is_disabled = await btn.get_attribute("disabled") or await btn.get_attribute("aria-disabled") == "true"
+                        is_disabled = btn.get_attribute("disabled") or btn.get_attribute("aria-disabled") == "true"
                         if is_disabled:
                             print(f"  Button found but disabled: {sel}")
                             continue
                         print(f"  Clicking Save button: {sel}")
-                        await btn.click()
+                        btn.click()
                         # Wait for form submission / next question to appear
-                        await page.wait_for_timeout(3000)
+                        page.wait_for_timeout(3000)
                         # Check if question changed (form submitted)
                         try:
-                            new_question = await self._get_chatbot_question(chatbot)
+                            new_question = self._get_chatbot_question(chatbot)
                             if new_question:
                                 print(f"  [Chatbot] Form submitted, next question: {new_question[:50]}")
                             else:
@@ -969,7 +956,7 @@ class JobApplier:
         print("  No Save button found")
         return False
 
-    async def _find_chatbot_container(self, page: Any):
+    def _find_chatbot_container(self, page: Any):
         """Find chatbot sidebar container element."""
         chatbot_selectors = [
             "[class*='chatbot']",
@@ -990,14 +977,13 @@ class JobApplier:
             "[data-testid*='chat']",
         ]
         for sel in chatbot_selectors:
-            elem = await page.query_selector(sel)
-            if elem and await elem.is_visible():
+            elem = page.query_selector(sel)
+            if elem and elem.is_visible():
                 print(f"  Found chatbot container with selector: {sel}")
                 return elem
         # Fallback: check if any visible element contains chatbot-like text
         try:
-            body_text = await page.inner_text("body")
-            body_text = body_text.lower()
+            body_text = page.inner_text("body").lower()
             if any(kw in body_text for kw in ['years of experience', 'notice period', 'current ctc', 'expected ctc', 'skip this question', 'crowdstrike', 'how many years']):
                 print("  Chatbot-like text found on page, using page as chatbot container")
                 return page
@@ -1005,7 +991,7 @@ class JobApplier:
             pass
         return None
 
-    async def _get_chatbot_question(self, chatbot) -> str:
+    def _get_chatbot_question(self, chatbot) -> str:
         """Extract current question text from chatbot."""
         try:
             # Look for question text in various elements
@@ -1015,10 +1001,9 @@ class JobApplier:
                 "div[class*='text']", "span[class*='text']",
             ]
             for sel in question_selectors:
-                elems = await chatbot.query_selector_all(sel)
+                elems = chatbot.query_selector_all(sel)
                 for el in elems:
-                    text = await el.inner_text()
-                    text = text.strip()
+                    text = el.inner_text().strip()
                     if text and len(text) > 10 and len(text) < 500:
                         # Check if it looks like a question
                         if any(q in text.lower() for q in ['?', 'years', 'experience', 'notice', 'salary', 'ctc', 'company', 'skill', 'tool', 'technology', 'azure', 'aws', 'cloud', 'terraform', 'ansible', 'kubernetes', 'docker', 'jenkins', 'ci/cd', 'devops']):
@@ -1029,8 +1014,7 @@ class JobApplier:
                             if len(clean_text) > 10:
                                 return clean_text
             # Fallback: get all text and find question-like part
-            all_text = await chatbot.inner_text()
-            all_text = all_text.strip()
+            all_text = chatbot.inner_text().strip()
             if all_text:
                 # Try to extract last sentence that looks like a question
                 sentences = [s.strip() for s in all_text.split('.') if s.strip()]
@@ -1045,7 +1029,7 @@ class JobApplier:
             pass
         return ""
 
-    async def _click_chatbot_continue(self, chatbot, page: Any = None) -> bool:
+    def _click_chatbot_continue(self, chatbot, page: Any = None) -> bool:
         """Click Next/Continue button in chatbot. Searches both chatbot container and full page."""
         continue_selectors = [
             "button:has-text('Next')", 
@@ -1077,16 +1061,16 @@ class JobApplier:
         
         for ctx in search_contexts:
             for sel in continue_selectors:
-                btn = await ctx.query_selector(sel)
-                if btn and await btn.is_visible():
+                btn = ctx.query_selector(sel)
+                if btn and btn.is_visible():
                     try:
                         # Check if button is disabled
-                        is_disabled = await btn.get_attribute("disabled") or await btn.get_attribute("aria-disabled") == "true"
+                        is_disabled = btn.get_attribute("disabled") or btn.get_attribute("aria-disabled") == "true"
                         if is_disabled:
                             print(f"  Button found but disabled: {sel}")
                             continue
                         print(f"  Clicking Continue button: {sel}")
-                        await btn.click()
+                        btn.click()
                         return True
                     except Exception as e:
                         print(f"  Continue click failed: {e}")
@@ -1094,7 +1078,7 @@ class JobApplier:
         print("  No Continue button found")
         return False
 
-    async def _click_chatbot_submit(self, chatbot) -> bool:
+    def _click_chatbot_submit(self, chatbot) -> bool:
         """Click final Submit button in chatbot."""
         submit_selectors = [
             "button:has-text('Submit')", 
@@ -1112,61 +1096,59 @@ class JobApplier:
             "button[aria-label*='Finish']",
         ]
         for sel in submit_selectors:
-            btn = await chatbot.query_selector(sel)
-            if btn and await btn.is_visible():
+            btn = chatbot.query_selector(sel)
+            if btn and btn.is_visible():
                 try:
-                    is_disabled = await btn.get_attribute("disabled") or await btn.get_attribute("aria-disabled") == "true"
+                    is_disabled = btn.get_attribute("disabled") or btn.get_attribute("aria-disabled") == "true"
                     if is_disabled:
                         continue
-                    await btn.click()
+                    btn.click()
                     return True
                 except Exception:
                     continue
         return False
 
-    async def _fill_placeholder_answer(self, chatbot, question: str) -> None:
+    def _fill_placeholder_answer(self, chatbot, question: str) -> None:
         """Fill placeholder for unanswered question - try text input or radio buttons."""
         try:
             # Try text input first
-            input_elem = await chatbot.query_selector("input[type='text'], textarea, input:not([type])")
-            if input_elem and await input_elem.is_visible():
-                await input_elem.fill("NEEDS_MANUAL_INPUT")
+            input_elem = chatbot.query_selector("input[type='text'], textarea, input:not([type])")
+            if input_elem and input_elem.is_visible():
+                input_elem.fill("NEEDS_MANUAL_INPUT")
                 return
             
             # Try radio buttons - select first available
-            radios = await chatbot.query_selector_all("input[type='radio']")
+            radios = chatbot.query_selector_all("input[type='radio']")
             for radio in radios:
-                if await radio.is_visible() and not await radio.is_checked():
-                    await radio.click()
+                if radio.is_visible() and not radio.is_checked():
+                    radio.click()
                     return
         except Exception:
             pass
 
-    async def _select_radio_by_years(self, chatbot, years: int) -> bool:
+    def _select_radio_by_years(self, chatbot, years: int) -> bool:
         """Select radio button based on years of experience."""
         try:
             # Find all radio buttons and their labels
-            radio_groups = await chatbot.query_selector_all("input[type='radio']")
+            radio_groups = chatbot.query_selector_all("input[type='radio']")
             for radio in radio_groups:
-                if not await radio.is_visible():
+                if not radio.is_visible():
                     continue
                 
                 # Get the label text associated with this radio
-                radio_id = await radio.get_attribute("id")
+                radio_id = radio.get_attribute("id")
                 label_text = ""
                 
                 if radio_id:
-                    label = await chatbot.query_selector(f"label[for='{radio_id}']")
+                    label = chatbot.query_selector(f"label[for='{radio_id}']")
                     if label:
-                        label_text = await label.inner_text()
-                        label_text = label_text.strip().lower()
+                        label_text = label.inner_text().strip().lower()
                 
                 # Also check parent label
                 if not label_text:
-                    parent = await radio.query_selector("xpath=..")
+                    parent = radio.query_selector("xpath=..")
                     if parent:
-                        label_text = await parent.inner_text()
-                        label_text = label_text.strip().lower()
+                        label_text = parent.inner_text().strip().lower()
                 
                 # Check if this radio option matches our years
                 # Common patterns: "0-1", "1-3", "3-5", "5+", "0-1 years", "1-3 years", etc.
@@ -1178,7 +1160,7 @@ class JobApplier:
                         min_years = int(range_match.group(1))
                         max_years = int(range_match.group(2))
                         if min_years <= years <= max_years:
-                            await radio.click()
+                            radio.click()
                             return True
                     
                     # Check for "X+" pattern
@@ -1186,7 +1168,7 @@ class JobApplier:
                     if plus_match:
                         min_years = int(plus_match.group(1))
                         if years >= min_years:
-                            await radio.click()
+                            radio.click()
                             return True
                     
                     # Check for "X years" pattern
@@ -1194,7 +1176,7 @@ class JobApplier:
                     if years_match:
                         option_years = int(years_match.group(1))
                         if option_years == years:
-                            await radio.click()
+                            radio.click()
                             return True
                     
                     # Check for "less than X" or "under X"
@@ -1203,7 +1185,7 @@ class JobApplier:
                         if under_match:
                             max_years = int(under_match.group(1))
                             if years < max_years:
-                                await radio.click()
+                                radio.click()
                                 return True
                     
                     # Check for "more than X" or "over X"
@@ -1212,20 +1194,20 @@ class JobApplier:
                         if over_match:
                             min_years = int(over_match.group(1))
                             if years > min_years:
-                                await radio.click()
+                                radio.click()
                                 return True
             
             # Fallback: click first available radio
             for radio in radio_groups:
-                if await radio.is_visible() and not await radio.is_checked():
-                    await radio.click()
+                if radio.is_visible() and not radio.is_checked():
+                    radio.click()
                     return True
                     
         except Exception as e:
             print(f"  Radio selection error: {e}")
         return False
 
-    async def _debug_dump_sidebar_elements(self, page: Any) -> None:
+    def _debug_dump_sidebar_elements(self, page: Any) -> None:
         """Dump all potential chatbot/sidebar elements for selector tuning."""
         import os
         os.makedirs("txt_output", exist_ok=True)
@@ -1242,12 +1224,11 @@ class JobApplier:
         with open(debug_file, "w") as f:
             f.write("=== CHATBOT DEBUG: Potential sidebar elements ===\n\n")
             for sel in selectors:
-                elems = await page.query_selector_all(sel)
+                elems = page.query_selector_all(sel)
                 for i, el in enumerate(elems):
-                    if await el.is_visible():
+                    if el.is_visible():
                         try:
-                            html = await el.get_attribute("outerHTML")
-                            html = html[:500] if html else ""
+                            html = el.get_attribute("outerHTML")[:500]
                             f.write(f"  [{sel}] #{i}: {html}\n\n")
                         except Exception:
                             pass
@@ -1255,7 +1236,7 @@ class JobApplier:
         
         print(f"  Chatbot debug saved to {debug_file}")
 
-    async def _dismiss_chatbot_overlay(self, page: Any) -> None:
+    def _dismiss_chatbot_overlay(self, page: Any) -> None:
         """Dismiss chatbot/widget overlays that intercept clicks."""
         try:
             # Common chatbot overlay selectors on Naukri
@@ -1270,50 +1251,51 @@ class JobApplier:
                 "[class*='overlay']:has-text('×')",
             ]
             for sel in overlay_selectors:
-                overlay = await page.query_selector(sel)
-                if overlay and await overlay.is_visible():
+                overlay = page.query_selector(sel)
+                if overlay and overlay.is_visible():
                     # Try to find close button within overlay
-                    close_btn = await overlay.query_selector("button, [role='button'], a")
-                    if close_btn and await close_btn.is_visible():
-                        await close_btn.click()
-                        await page.wait_for_timeout(500)
+                    close_btn = overlay.query_selector("button, [role='button'], a")
+                    if close_btn and close_btn.is_visible():
+                        close_btn.click()
+                        page.wait_for_timeout(500)
                         print(f"  Dismissed chatbot overlay: {sel}")
                         return
                     # Try clicking overlay itself to dismiss
                     try:
-                        await overlay.click(position={"x": 10, "y": 10})  # Click corner
-                        await page.wait_for_timeout(500)
+                        overlay.click(position={"x": 10, "y": 10})  # Click corner
+                        page.wait_for_timeout(500)
                         print(f"  Clicked overlay corner to dismiss: {sel}")
                         return
                     except:
                         pass
             # Try pressing Escape key to dismiss any modal
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(500)
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(500)
         except Exception as e:
             print(f"  Chatbot dismiss attempt failed: {e}")
 
-    async def _close_job_tab_safely(self, job_page: Any, search_page: Any) -> None:
+    def _close_job_tab_safely(self, job_page: Any, search_page: Any) -> None:
         """Safely close job detail tab and return to search results."""
         try:
             if job_page:
-                await job_page.close()
-            await search_page.wait_for_timeout(1000)  # Let search page stabilize
+                job_page.close()
+            search_page.wait_for_timeout(1000)  # Let search page stabilize
             # Dismiss chatbot overlay if it appeared
-            await self._dismiss_chatbot_overlay(search_page)
+            self._dismiss_chatbot_overlay(search_page)
         except Exception:
             # Fallback: close any extra tabs
             try:
+                from playwright.sync_api import sync_playwright
                 # Context is available through search_page
                 context = search_page.context
                 while len(context.pages) > 1:
                     extra_page = context.pages[-1]
                     if extra_page != search_page:
-                        await extra_page.close()
+                        extra_page.close()
             except Exception:
                 pass
 
-    async def sort_by_date(self, page: Any) -> None:
+    def sort_by_date(self, page: Any) -> None:
         """Sort search results by date with verification and retry - ROBUST version."""
         max_retries = 3
         for attempt in range(max_retries):
@@ -1324,46 +1306,45 @@ class JobApplier:
                     print(f"  Sorting by date (attempt {attempt + 1}/{max_retries})...")
                 
                 # Wait for sort button with longer timeout
-                await page.wait_for_selector("#filter-sort", timeout=60000)
-                sort_btn = await page.query_selector("#filter-sort")
+                page.wait_for_selector("#filter-sort", timeout=60000)
+                sort_btn = page.query_selector("#filter-sort")
                 
-                if sort_btn and await sort_btn.is_visible():
-                    await sort_btn.click()
-                    await page.wait_for_timeout(3000)
+                if sort_btn and sort_btn.is_visible():
+                    sort_btn.click()
+                    page.wait_for_timeout(3000)
                     
                     # Multiple strategies to find the Date option
                     date_option = None
                     
                     # Strategy 1: data-filter-id with text
-                    date_option = await page.query_selector("[data-filter-id='sort'] a:has-text('Date'), [data-filter-id='sort'] li:has-text('Date')")
+                    date_option = page.query_selector("[data-filter-id='sort'] a:has-text('Date'), [data-filter-id='sort'] li:has-text('Date')")
                     
                     # Strategy 2: data-id attribute
                     if not date_option:
-                        date_option = await page.query_selector("a[data-id='filter-sort-f']")
+                        date_option = page.query_selector("a[data-id='filter-sort-f']")
                     
                     # Strategy 3: any element within dropdown with "Date" text
                     if not date_option:
-                        date_option = await page.query_selector("[data-filter-id='sort'] *:has-text('Date')")
+                        date_option = page.query_selector("[data-filter-id='sort'] *:has-text('Date')")
                     
                     # Strategy 4: broader search - any visible element with "Date" in sort dropdown area
                     if not date_option:
                         # Try clicking the sort button again to reopen dropdown
-                        await sort_btn.click()
-                        await page.wait_for_timeout(2000)
-                        date_option = await page.query_selector(":has-text('Date'):visible")
+                        sort_btn.click()
+                        page.wait_for_timeout(2000)
+                        date_option = page.query_selector(":has-text('Date'):visible")
                     
-                    if date_option and await date_option.is_visible():
-                        await date_option.click()
-                        await page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=60000)
+                    if date_option and date_option.is_visible():
+                        date_option.click()
+                        page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=60000)
                         
                         # Verify sort worked by checking first job date
-                        await page.wait_for_timeout(3000)
-                        first_card = await page.query_selector("[data-job-id], .jobTuple, .job-card")
+                        page.wait_for_timeout(3000)
+                        first_card = page.query_selector("[data-job-id], .jobTuple, .job-card")
                         if first_card:
-                            posted_elem = await first_card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
+                            posted_elem = first_card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
                             if posted_elem:
-                                posted_text = await posted_elem.inner_text()
-                                posted_text = posted_text.strip().lower()
+                                posted_text = posted_elem.inner_text().strip().lower()
                                 if self.ui:
                                     self.ui.console.print(f"  [Sort] First job posted: {posted_text}")
                                 else:
@@ -1396,13 +1377,13 @@ class JobApplier:
                 else:
                     print(f"  Sort by date attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    await page.wait_for_timeout(5000)
+                    page.wait_for_timeout(5000)
         if self.ui:
             self.ui.console.print("  [Sort] Sort by date failed after retries")
         else:
             print("  Sort by date failed after retries")
 
-    async def _apply_location_filters(self, page: Any) -> None:
+    def _apply_location_filters(self, page: Any) -> None:
         """Apply location filters from user profile - ROBUST version."""
         locations = self.profile.get("preferred_locations", [])
         if not locations:
@@ -1411,46 +1392,46 @@ class JobApplier:
             else:
                 print("  No preferred locations configured")
             return
-        
+
         if self.ui:
             self.ui.console.print(f"  [Location] Applying filters: {locations}")
         else:
             print(f"  Applying location filters: {locations}")
-        
+
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                location_btn = await page.query_selector("button:has-text('Location'), span:has-text('Location'), [data-filter-id='location']")
-                if location_btn and await location_btn.is_visible():
-                    await location_btn.scroll_into_view_if_needed()
-                    await page.wait_for_timeout(1500)
-                    await location_btn.click()
-                    await page.wait_for_timeout(3000)
-                    
+                location_btn = page.query_selector("button:has-text('Location'), span:has-text('Location'), [data-filter-id='location']")
+                if location_btn and location_btn.is_visible():
+                    location_btn.scroll_into_view_if_needed()
+                    page.wait_for_timeout(1500)
+                    location_btn.click()
+                    page.wait_for_timeout(3000)
+
                     success_count = 0
                     for loc in locations:
                         # Try multiple selectors for location
-                        loc_elem = await page.query_selector(f"label:has-text('{loc}'), span:has-text('{loc}'), input[value='{loc}'], li:has-text('{loc}')")
-                        if loc_elem and await loc_elem.is_visible():
+                        loc_elem = page.query_selector(f"label:has-text('{loc}'), span:has-text('{loc}'), input[value='{loc}'], li:has-text('{loc}')")
+                        if loc_elem and loc_elem.is_visible():
                             if self.ui:
                                 self.ui.console.print(f"  [Location] Selecting: {loc}")
                             else:
                                 print(f"  Selecting location: {loc}")
-                            await loc_elem.click()
-                            await page.wait_for_timeout(800)
+                            loc_elem.click()
+                            page.wait_for_timeout(800)
                             success_count += 1
                         else:
                             if self.ui:
                                 self.ui.console.print(f"  [Location] Not found: {loc}")
                             else:
                                 print(f"  Location not found: {loc}")
-                    
+
                     # Close dropdown with Escape key
-                    await page.keyboard.press("Escape")
-                    await page.wait_for_timeout(3000)
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(3000)
                     
                     # Wait for results to reload
-                    await page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=60000)
+                    page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=60000)
                     
                     if self.ui:
                         self.ui.console.print(f"  [Location] Filters applied ({success_count}/{len(locations)} found)")
@@ -1463,14 +1444,14 @@ class JobApplier:
                 else:
                     print(f"  Location filter attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    await page.wait_for_timeout(3000)
+                    page.wait_for_timeout(3000)
         
         if self.ui:
             self.ui.console.print("  [Location] Filters failed after retries")
         else:
             print("  Location filters failed after retries")
 
-    async def process_role(self, page: Any, keyword: str, max_jobs: int, context: Any) -> dict:
+    def process_role(self, page: Any, keyword: str, max_jobs: int, context: Any) -> dict:
         """Process a single role: search, filter, check each job, apply if match."""
         base_url = f"https://www.naukri.com/{keyword.lower().replace(' ', '-').replace('&', '')}-jobs"
         search_url = f"{base_url}?experience=3"
@@ -1485,59 +1466,58 @@ class JobApplier:
             print(f"Processing role: {keyword}")
             print(f"URL: {search_url}")
             print(f"{'='*60}")
-        
+
         applied = []
         skipped = []
         errors = []
         processed = 0
-        
+
         # Load search page ONCE
-        await page.goto(search_url, wait_until="domcontentloaded", timeout=90000)
-        await page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=30000)
-        
+        page.goto(search_url, wait_until="domcontentloaded", timeout=90000)
+        page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=30000)
+
         # Dismiss chatbot overlay if present on search page
-        await self._dismiss_chatbot_overlay(page)
-        
+        self._dismiss_chatbot_overlay(page)
+
         # Ensure NO tabs are open except the main search page
         while len(context.pages) > 1:
             try:
                 extra_page = context.pages[-1]
                 if extra_page != page:
-                    await extra_page.close()
+                    extra_page.close()
             except Exception:
                 break
-        
+
         # Apply filters ONCE - location first, then sort by date
-        await self._apply_location_filters(page)
-        await self.sort_by_date(page)
-        
+        self._apply_location_filters(page)
+        self.sort_by_date(page)
+
         # Verify sort is applied by checking first job date
-        await page.wait_for_timeout(2000)
-        first_card = await page.query_selector("[data-job-id], .jobTuple, .job-card")
+        page.wait_for_timeout(2000)
+        first_card = page.query_selector("[data-job-id], .jobTuple, .job-card")
         if first_card:
-            posted_elem = await first_card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
+            posted_elem = first_card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
             if posted_elem:
-                posted_text = await posted_elem.inner_text()
-                posted_text = posted_text.strip().lower()
+                posted_text = posted_elem.inner_text().strip().lower()
                 if self.ui:
                     self.ui.console.print(f"  Verified first job posted: {posted_text}")
                 else:
                     print(f"  Verified first job posted: {posted_text}")
-        
+
         # Dismiss chatbot again after filters (may reappear)
-        await self._dismiss_chatbot_overlay(page)
-        
+        self._dismiss_chatbot_overlay(page)
+
         # Get initial job cards AFTER filters and sort are applied
-        cards = await page.query_selector_all("[data-job-id], .jobTuple, .job-card")
+        cards = page.query_selector_all("[data-job-id], .jobTuple, .job-card")
         total_cards = len(cards)
         if self.ui:
             self.ui.console.print(f"Found {total_cards} job cards after filters and sort")
         else:
             print(f"Found {total_cards} job cards after filters and sort")
-        
-# Use parallel processing if max_parallel > 1
+
+        # Use parallel processing if max_parallel > 1
         if self.max_parallel > 1:
-            return await self._process_role_parallel(page, keyword, max_jobs, context, cards, total_cards)
+            return self._process_role_parallel(page, keyword, max_jobs, context, cards, total_cards)
         
         card_index = 0
         while processed < max_jobs and card_index < len(cards):
@@ -1546,7 +1526,7 @@ class JobApplier:
                 try:
                     extra_page = context.pages[-1]
                     if extra_page != page:
-                        await extra_page.close()
+                        extra_page.close()
                 except Exception:
                     break
             
@@ -1554,11 +1534,10 @@ class JobApplier:
             try:
                 card = cards[card_index]
                 # Test if card is still attached
-                if not await card.is_visible():
-                    raise Exception("Card not visible")
+                _ = card.is_visible()
             except Exception:
                 # Stale element - re-query
-                cards = await page.query_selector_all("[data-job-id], .jobTuple, .job-card")
+                cards = page.query_selector_all("[data-job-id], .jobTuple, .job-card")
                 if card_index >= len(cards):
                     if self.ui:
                         self.ui.console.print("No more cards to process")
@@ -1566,23 +1545,22 @@ class JobApplier:
                         print("No more cards to process")
                     break
                 card = cards[card_index]
-            
+
             try:
                 # Get title and posted date from card
-                title_elem = await card.query_selector("a.title, a[class*='title'], h2 a, h3 a, .job-title a")
-                link_elem = await card.query_selector("a[href*='job-'], a[href*='/job/'], a.title")
-                
+                title_elem = card.query_selector("a.title, a[class*='title'], h2 a, h3 a, .job-title a")
+                link_elem = card.query_selector("a[href*='job-'], a[href*='/job/'], a.title")
+
                 if not title_elem or not link_elem:
                     card_index += 1
                     continue
-                
-                title = await title_elem.inner_text()
-                title = title.strip()
-                url = await link_elem.get_attribute("href")
-                posted = await self.get_posted_date_from_card(card)
-                company = await self.get_company_from_card(card)
-                experience = await self.get_experience_from_card(card)
-                
+
+                title = title_elem.inner_text().strip()
+                url = link_elem.get_attribute("href")
+                posted = self.get_posted_date_from_card(card)
+                company = self.get_company_from_card(card)
+                experience = self.get_experience_from_card(card)
+
                 # Check if recent
                 if not is_recent_job(posted, self.max_days_old):
                     if self.ui:
@@ -1593,7 +1571,7 @@ class JobApplier:
                         print(f"  [{card_index+1}] Skip (old): {title[:50]} | Posted: {posted}")
                     card_index += 1
                     continue
-                
+
                 # Check if relevant title (only if check_all_jobs is False)
                 if not self.check_all_jobs and not self.is_relevant_title(title):
                     if self.ui:
@@ -1604,7 +1582,7 @@ class JobApplier:
                         print(f"  [{card_index+1}] Skip (irrelevant): {title[:50]} | Posted: {posted}")
                     card_index += 1
                     continue
-                
+
                 # Create UI row for this job
                 if self.ui:
                     row = self.ui.add_job(card_index, title)
@@ -1615,16 +1593,16 @@ class JobApplier:
                     print(f"      Company: {company}")
                     print(f"      Experience: {experience}")
                     print(f"      URL: {url}")
-                
+
                 # Click job to open detail page in NEW TAB (with retry)
                 job_page = None
                 for attempt in range(3):
                     try:
-                        async with context.expect_page() as new_page_info:
-                            await link_elem.click()
+                        with context.expect_page() as new_page_info:
+                            link_elem.click()
                         job_page = new_page_info.value
-                        await job_page.wait_for_load_state("domcontentloaded", timeout=30000)
-                        await job_page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
+                        job_page.wait_for_load_state("domcontentloaded", timeout=30000)
+                        job_page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
                         break
                     except Exception as e:
                         if self.ui:
@@ -1633,7 +1611,7 @@ class JobApplier:
                             print(f"      ✗ Failed to open job (attempt {attempt+1}/3): {e}")
                         if job_page:
                             try:
-                                await job_page.close()
+                                job_page.close()
                             except:
                                 pass
                         if attempt == 2:
@@ -1645,21 +1623,21 @@ class JobApplier:
                             errors.append({"title": title, "url": url, "error": str(e)})
                             card_index += 1
                             continue
-                        await page.wait_for_timeout(2000)
+                        page.wait_for_timeout(2000)
                 
                 if not job_page:
                     card_index += 1
                     continue
-                
+
                 # Extract JD and check skills from new tab (with timeout and error handling)
                 job_data = None
                 try:
                     if self.ui:
                         self.ui.update_job(card_index, status=JobStatus.ANALYZING)
                     
-                    jd_text = await self.extract_job_description(job_page)
+                    jd_text = self.extract_job_description(job_page)
                     jd_text = jd_text[:5000]
-                    
+
                     job_skills = extract_skills_from_text(jd_text)
                     
                     # Use optimized skills from profile for matching (expanded for >75% match)
@@ -1673,11 +1651,11 @@ class JobApplier:
                     if not self.ui:
                         print(f"      Skills in JD: {job_skills[:10]}")
                         print(f"      Match: {match_pct:.1f}% | Matched: {matched} | Missing: {missing[:5]}")
-                    
+
                     # Get salary and location from card
-                    salary = await self.get_salary_from_card(card)
-                    location = await self.get_location_from_card(card)
-                    
+                    salary = self.get_salary_from_card(card)
+                    location = self.get_location_from_card(card)
+
                     # Collect job data for output file
                     job_data = {
                         "role": keyword,
@@ -1698,7 +1676,7 @@ class JobApplier:
                         "status": "skipped" if not should else "applied",
                         "error": None
                     }
-                    
+
                     if should:
                         if self.ui:
                             self.ui.update_job(card_index, salary=salary, location=location, status=JobStatus.APPLYING)
@@ -1707,15 +1685,15 @@ class JobApplier:
                             # Wait for apply button to be ready - use loop with query_selector
                             apply_btn = None
                             for attempt in range(15):
-                                await page.wait_for_timeout(1000)
-                                apply_btn = await job_page.query_selector("#apply-button")
+                                job_page.wait_for_timeout(1000)
+                                apply_btn = job_page.query_selector("#apply-button")
                                 if apply_btn:
                                     break
                                 else:
                                     pass  # Silent retry
                         
                         # Use new click_apply with outcome detection
-                        result = await self.click_apply(job_page, context, job_data)
+                        result = self.click_apply(job_page, context, job_data)
                         
                         if result["status"] == "applied":
                             applied.append({
@@ -1796,10 +1774,10 @@ class JobApplier:
                             self.ui.increment_processed(JobStatus.SKIPPED_MISMATCH)
                         else:
                             pass  # Silent in UI mode
-                    
-                    self.collector.add_job(job_data)
-                    processed += 1
-                
+
+                        self.collector.add_job(job_data)
+                        processed += 1
+
                 except Exception as e:
                     if self.ui:
                         self.ui.update_job(card_index, status=JobStatus.ERROR, error_msg=str(e)[:40])
@@ -1811,11 +1789,17 @@ class JobApplier:
                         job_data["status"] = "error"
                         job_data["error"] = str(e)
                         self.collector.add_job(job_data)
-                
+
                 finally:
                     # ALWAYS close job detail tab - robust cleanup
-                    await self._close_job_tab_safely(job_page, page)
-            
+                    self._close_job_tab_safely(job_page, page)
+
+                card_index += 1
+
+                # Rate limiting delay between jobs
+                if self.job_delay > 0:
+                    page.wait_for_timeout(self.job_delay * 1000)
+
             except Exception as e:
                 if self.ui:
                     self.ui.update_job(card_index, status=JobStatus.ERROR, error_msg=str(e)[:40])
@@ -1824,12 +1808,6 @@ class JobApplier:
                     print(f"  ✗ Error with card {card_index}: {e}")
                 card_index += 1
                 continue
-            
-            card_index += 1
-            
-            # Rate limiting delay between jobs
-            if self.job_delay > 0:
-                await asyncio.sleep(self.job_delay)
 
         if processed == 0:
             if self.ui:
@@ -1839,274 +1817,284 @@ class JobApplier:
 
         return {"applied": applied, "skipped": skipped, "errors": errors}
 
-    async def _process_role_parallel(self, page: Any, keyword: str, max_jobs: int, context: Any, cards: list, total_cards: int) -> dict:
-        """Process jobs in parallel using asyncio + semaphore."""
-        semaphore = asyncio.Semaphore(self.max_parallel)
+    def _process_role_parallel(self, page: Any, keyword: str, max_jobs: int, context: Any, cards: list, total_cards: int) -> dict:
+        """Process jobs in parallel using multiple browser contexts."""
+        from playwright.sync_api import sync_playwright
+        
         applied = []
         skipped = []
         errors = []
         processed = 0
         
-        # Create a task for each job to process
-        async def process_single_job(card_index: int) -> dict:
-            async with semaphore:
-                # Stagger job starts to avoid rate limiting
-                if self.job_delay > 0:
-                    await asyncio.sleep(self.job_delay * (card_index % self.max_parallel))
-                
-                # Create isolated browser context from same browser
-                job_context = await context.browser.new_context()
-                await job_context.add_cookies(await context.cookies())
-                job_page = await job_context.new_page()
-                job_page.set_default_timeout(60000)
-                job_page.set_default_navigation_timeout(90000)
+        # Create a semaphore to limit concurrent jobs
+        semaphore = threading.Semaphore(self.max_parallel)
+        results_lock = threading.Lock()
+        
+        def process_single_job(card_index: int) -> dict:
+            """Process a single job card in its own browser context."""
+            with semaphore:
+                # Create new browser context for this job
+                with self._browser_lock:
+                    if not self._playwright:
+                        return {"error": "Browser not initialized"}
+                    job_context = self._browser.new_context()
+                    job_context.add_cookies(context.cookies())
+                    job_page = job_context.new_page()
+                    job_page.set_default_timeout(60000)
+                    job_page.set_default_navigation_timeout(90000)
                 
                 try:
-                    # Navigate to search page, re-apply filters, find card by index
+                    # Re-find the card in the new context (navigate to search page)
                     base_url = f"https://www.naukri.com/{keyword.lower().replace(' ', '-').replace('&', '')}-jobs"
                     search_url = f"{base_url}?experience=3"
-                    await job_page.goto(search_url, wait_until="domcontentloaded", timeout=90000)
-                    await job_page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=30000)
-                    await self._apply_location_filters(job_page)
-                    await self.sort_by_date(job_page)
-                    await job_page.wait_for_timeout(2000)
+                    job_page.goto(search_url, wait_until="domcontentloaded", timeout=90000)
+                    job_page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=30000)
+                    self._apply_location_filters(job_page)
+                    self.sort_by_date(job_page)
+                    job_page.wait_for_timeout(2000)
                     
-                    job_cards = await job_page.query_selector_all("[data-job-id], .jobTuple, .job-card")
+                    job_cards = job_page.query_selector_all("[data-job-id], .jobTuple, .job-card")
                     if card_index >= len(job_cards):
                         return {"error": "Card index out of range", "skipped": True}
                     
                     card = job_cards[card_index]
                     
                     # Get title and posted date from card
-                    title_elem = await card.query_selector("a.title, a[class*='title'], h2 a, h3 a, .job-title a")
-                    link_elem = await card.query_selector("a[href*='job-'], a[href*='/job/'], a.title")
-                    
+                    title_elem = card.query_selector("a.title, a[class*='title'], h2 a, h3 a, .job-title a")
+                    link_elem = card.query_selector("a[href*='job-'], a[href*='/job/'], a.title")
+
                     if not title_elem or not link_elem:
                         return {"error": "No title/link element", "skipped": True}
-                    
-                    title = await title_elem.inner_text()
-                    title = title.strip()
-                    url = await link_elem.get_attribute("href")
-                    posted = await self.get_posted_date_from_card(card)
-                    company = await self.get_company_from_card(card)
-                    experience = await self.get_experience_from_card(card)
-                    
+
+                    title = title_elem.inner_text().strip()
+                    url = link_elem.get_attribute("href")
+                    posted = self.get_posted_date_from_card(card)
+                    company = self.get_company_from_card(card)
+                    experience = self.get_experience_from_card(card)
+
                     # Check if recent
                     if not is_recent_job(posted, self.max_days_old):
                         return {"skipped": True, "reason": "old", "title": title, "posted": posted}
-                    
+
                     # Check if relevant title
                     if not self.check_all_jobs and not self.is_relevant_title(title):
                         return {"skipped": True, "reason": "irrelevant", "title": title, "posted": posted}
-                    
+
                     # Click job to open detail page
                     job_detail_page = None
                     for attempt in range(3):
                         try:
-                            async with job_context.expect_page() as new_page_info:
-                                await link_elem.click()
+                            with job_context.expect_page() as new_page_info:
+                                link_elem.click()
                             job_detail_page = new_page_info.value
-                            await job_detail_page.wait_for_load_state("domcontentloaded", timeout=30000)
-                            await job_detail_page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
+                            job_detail_page.wait_for_load_state("domcontentloaded", timeout=30000)
+                            job_detail_page.wait_for_selector("[class*='jd-container'], .job-desc, .JDContent", timeout=30000)
                             break
                         except Exception as e:
                             if job_detail_page:
                                 try:
-                                    await job_detail_page.close()
+                                    job_detail_page.close()
                                 except:
                                     pass
                             if attempt == 2:
                                 return {"error": f"Failed to open job: {e}", "title": title, "url": url}
-                            await job_page.wait_for_timeout(2000)
+                            job_page.wait_for_timeout(2000)
                     
                     if not job_detail_page:
                         return {"error": "No job detail page", "title": title, "url": url}
-                    
-                    jd_text = await self.extract_job_description(job_detail_page)
-                    jd_text = jd_text[:5000]
-                    
-                    job_skills = extract_skills_from_text(jd_text)
-                    resume_skills = self.profile.get("optimized_skills", self.resume.skills)
-                    
-                    should, match_pct, matched, missing = should_apply(
-                        resume_skills, jd_text, self.match_threshold
-                    )
-                    
-                    salary = await self.get_salary_from_card(card)
-                    location = await self.get_location_from_card(card)
-                    
-                    job_data = {
-                        "role": keyword,
-                        "title": title,
-                        "company": company,
-                        "experience": experience,
-                        "posted_date": posted,
-                        "url": url,
-                        "salary": salary,
-                        "location": location,
-                        "jd_text": jd_text,
-                        "jd_skills": job_skills,
-                        "resume_skills": resume_skills,
-                        "matched_skills": matched,
-                        "missing_skills": missing,
-                        "match_percentage": round(match_pct, 1),
-                        "applied": False,
-                        "status": "skipped" if not should else "applied",
-                        "error": None
-                    }
-                    
-                    if should:
-                        result = await self.click_apply(job_detail_page, job_context, job_data)
+
+                    try:
+                        jd_text = self.extract_job_description(job_detail_page)
+                        jd_text = jd_text[:5000]
+
+                        job_skills = extract_skills_from_text(jd_text)
+                        resume_skills = self.profile.get("optimized_skills", self.resume.skills)
                         
-                        if result["status"] == "applied":
-                            return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data}
-                        elif result["status"] == "company_site":
-                            return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data, "company_site": True}
-                        elif result["status"] == "chatbot":
-                            return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data}
-                        elif result["status"] == "chatbot_partial":
-                            return {"error": f"Chatbot unanswered questions: {result['unanswered']}", "title": title, "url": url, "job_data": job_data}
+                        should, match_pct, matched, missing = should_apply(
+                            resume_skills, jd_text, self.match_threshold
+                        )
+
+                        salary = self.get_salary_from_card(card)
+                        location = self.get_location_from_card(card)
+
+                        job_data = {
+                            "role": keyword,
+                            "title": title,
+                            "company": company,
+                            "experience": experience,
+                            "posted_date": posted,
+                            "url": url,
+                            "salary": salary,
+                            "location": location,
+                            "jd_text": jd_text,
+                            "jd_skills": job_skills,
+                            "resume_skills": resume_skills,
+                            "matched_skills": matched,
+                            "missing_skills": missing,
+                            "match_percentage": round(match_pct, 1),
+                            "applied": False,
+                            "status": "skipped" if not should else "applied",
+                            "error": None
+                        }
+
+                        if should:
+                            result = self.click_apply(job_detail_page, job_context, job_data)
+                            
+                            if result["status"] == "applied":
+                                return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data}
+                            elif result["status"] == "company_site":
+                                return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data, "company_site": True}
+                            elif result["status"] == "chatbot":
+                                return {"applied": True, "title": title, "url": url, "match_pct": match_pct, "posted": posted, "job_data": job_data}
+                            elif result["status"] == "chatbot_partial":
+                                return {"error": f"Chatbot unanswered questions: {result['unanswered']}", "title": title, "url": url, "job_data": job_data}
+                            else:
+                                return {"error": result.get("error", "Apply failed"), "title": title, "url": url, "job_data": job_data}
                         else:
-                            return {"error": result.get("error", "Apply failed"), "title": title, "url": url, "job_data": job_data}
-                    else:
-                        return {"skipped": True, "reason": "mismatch", "title": title, "url": url, "match_pct": match_pct, "missing": missing, "posted": posted, "job_data": job_data}
-                    
+                            return {"skipped": True, "reason": "mismatch", "title": title, "url": url, "match_pct": match_pct, "missing": missing, "posted": posted, "job_data": job_data}
+
+                    except Exception as e:
+                        return {"error": str(e), "title": title, "url": url}
+                    finally:
+                        self._close_job_tab_safely(job_detail_page, job_page)
+                        job_context.close()
+
                 except Exception as e:
                     return {"error": str(e), "title": title if 'title' in locals() else "Unknown"}
                 finally:
                     try:
-                        await job_context.close()
+                        job_context.close()
                     except:
                         pass
-        
-        # Create all tasks
+
+        # Collect card indices to process
         card_indices = list(range(min(max_jobs, total_cards)))
-        tasks = [process_single_job(idx) for idx in card_indices]
         
-        # Process as they complete - update UI for ACTIVE jobs only
-        for task in asyncio.as_completed(tasks):
-            result = await task
-            processed += 1
+        # Process in parallel
+        with ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
+            future_to_index = {executor.submit(process_single_job, idx): idx for idx in card_indices}
             
-            # Update UI (showing active jobs only per requirement)
-            if self.ui:
-                # Increment processed counter
-                if result.get("applied"):
-                    self.ui.increment_processed(JobStatus.APPLIED)
-                elif result.get("skipped"):
-                    reason = result.get("reason", "mismatch")
-                    if reason == "old":
-                        self.ui.increment_processed(JobStatus.SKIPPED_OLD)
-                    elif reason == "irrelevant":
-                        self.ui.increment_processed(JobStatus.SKIPPED_IRRELEVANT)
-                    else:
-                        self.ui.increment_processed(JobStatus.SKIPPED_MISMATCH)
-                elif result.get("error"):
-                    self.ui.increment_processed(JobStatus.ERROR)
-            
-            # Collect results
-            if result.get("applied"):
-                applied.append({
-                    "title": result["title"],
-                    "url": result["url"],
-                    "match_pct": result["match_pct"],
-                    "posted": result["posted"]
-                })
-                if result.get("job_data"):
-                    job_data = result["job_data"]
-                    job_data["applied"] = True
-                    job_data["status"] = "company_site" if result.get("company_site") else "applied"
-                    self.collector.add_job(job_data)
-            elif result.get("skipped"):
-                skipped.append({
-                    "title": result["title"],
-                    "url": result.get("url", ""),
-                    "match_pct": result.get("match_pct", 0),
-                    "missing": result.get("missing", []),
-                    "posted": result.get("posted", "")
-                })
-                if result.get("job_data"):
-                    job_data = result["job_data"]
-                    self.collector.add_job(job_data)
-            elif result.get("error"):
-                errors.append({
-                    "title": result.get("title", "Unknown"),
-                    "url": result.get("url", ""),
-                    "error": result["error"]
-                })
-                if result.get("job_data"):
-                    job_data = result["job_data"]
-                    job_data["status"] = "error"
-                    job_data["error"] = result["error"]
-                    self.collector.add_job(job_data)
-        
+            for future in as_completed(future_to_index):
+                result = future.result()
+                
+                with results_lock:
+                    processed += 1
+                    
+                    if result.get("applied"):
+                        applied.append({
+                            "title": result["title"],
+                            "url": result["url"],
+                            "match_pct": result["match_pct"],
+                            "posted": result["posted"]
+                        })
+                        if self.ui:
+                            status = JobStatus.COMPANY_SITE if result.get("company_site") else JobStatus.APPLIED
+                            self.ui.increment_processed(status)
+                        job_data = result.get("job_data", {})
+                        job_data["applied"] = True
+                        job_data["status"] = "company_site" if result.get("company_site") else "applied"
+                        self.collector.add_job(job_data)
+                    elif result.get("skipped"):
+                        skipped.append({
+                            "title": result["title"],
+                            "url": result.get("url", ""),
+                            "match_pct": result.get("match_pct", 0),
+                            "missing": result.get("missing", []),
+                            "posted": result.get("posted", "")
+                        })
+                        if self.ui:
+                            if result.get("reason") == "old":
+                                self.ui.increment_processed(JobStatus.SKIPPED_OLD)
+                            elif result.get("reason") == "irrelevant":
+                                self.ui.increment_processed(JobStatus.SKIPPED_IRRELEVANT)
+                            else:
+                                self.ui.increment_processed(JobStatus.SKIPPED_MISMATCH)
+                        job_data = result.get("job_data", {})
+                        if job_data:
+                            self.collector.add_job(job_data)
+                    elif result.get("error"):
+                        errors.append({
+                            "title": result.get("title", "Unknown"),
+                            "url": result.get("url", ""),
+                            "error": result["error"]
+                        })
+                        if self.ui:
+                            self.ui.increment_processed(JobStatus.ERROR)
+                        job_data = result.get("job_data", {})
+                        if job_data:
+                            job_data["status"] = "error"
+                            job_data["error"] = result["error"]
+                            self.collector.add_job(job_data)
+
         if processed == 0:
             if self.ui:
                 self.ui.console.print("No matching jobs found to process")
             else:
                 print("No matching jobs found to process")
-        
+
         return {"applied": applied, "skipped": skipped, "errors": errors}
 
-    async def run(self, max_jobs_per_role: int = 10) -> dict:
+    def run(self, max_jobs_per_role: int = 10) -> dict:
         """Run the full pipeline: process each role sequentially."""
-        cookies = await self.load_session()
+        cookies = self.load_session()
         if not cookies:
             raise RuntimeError("No valid session. Run login.py first.")
-        
+
         keywords = self.profile.get("strict_roles", [])
-        
+
         all_applied = []
         all_skipped = []
         all_errors = []
-        
+
         # Initialize UI if provided
         if self.ui:
             self.ui.start()
-        
-        # Single Playwright instance for the entire run
-        async with Stealth().use_async(async_playwright()) as p:
-            browser = await p.chromium.launch(headless=self.headless_mode)
+
+        with sync_playwright() as p:
+            Stealth().use_sync(p)
+            browser = p.chromium.launch(headless=self.headless_mode)
             
+            # Store for parallel processing
+            self._playwright = p
+            self._browser = browser
+            self._context = browser.new_context()
+            self._context.add_cookies(cookies)
+            page = self._context.new_page()
+            
+            # Move browser window off-screen if not headless and minimize_browser is True
+            if not self.headless_mode and self.minimize_browser:
+                try:
+                    page.evaluate("() => window.moveTo(-2000, -2000)")
+                    page.set_viewport_size({"width": 800, "height": 600})
+                    print("  Browser window moved off-screen")
+                except Exception as e:
+                    print(f"  Could not move browser window: {e}")
+            
+            # Set longer timeout for headless mode
+            page.set_default_timeout(60000)
+            page.set_default_navigation_timeout(90000)
+
             try:
                 for keyword in keywords:
-                    # Create fresh context and page for each role to avoid state leakage
-                    context = await browser.new_context()
-                    await context.add_cookies(cookies)
-                    page = await context.new_page()
-                    
-                    # Move browser window off-screen if not headless and minimize_browser is True
-                    if not self.headless_mode and self.minimize_browser:
-                        try:
-                            await page.evaluate("() => window.moveTo(-2000, -2000)")
-                            await page.set_viewport_size({"width": 800, "height": 600})
-                            print("  Browser window moved off-screen")
-                        except Exception as e:
-                            print(f"  Could not move browser window: {e}")
-                    
-                    # Set longer timeout for headless mode
-                    page.set_default_timeout(60000)
-                    page.set_default_navigation_timeout(90000)
-                    
-                    try:
-                        result = await self.process_role(page, keyword, max_jobs_per_role, context)
-                        all_applied.extend(result["applied"])
-                        all_skipped.extend(result["skipped"])
-                        all_errors.extend(result["errors"])
-                        
-                        if self.ui:
-                            self.ui.console.print(f"\n[bold green]Role '{keyword}' complete: Applied={len(result['applied'])}, Skipped={len(result['skipped'])}, Errors={len(result['errors'])}[/bold green]")
-                        else:
-                            print(f"\nRole '{keyword}' complete: Applied={len(result['applied'])}, Skipped={len(result['skipped'])}, Errors={len(result['errors'])}")
-                        
-                        # Small delay between roles
-                        await asyncio.sleep(2)
-                    finally:
-                        await context.close()
-            
+                    result = self.process_role(page, keyword, max_jobs_per_role, self._context)
+                    all_applied.extend(result["applied"])
+                    all_skipped.extend(result["skipped"])
+                    all_errors.extend(result["errors"])
+
+                    if self.ui:
+                        self.ui.console.print(f"\n[bold green]Role '{keyword}' complete: Applied={len(result['applied'])}, Skipped={len(result['skipped'])}, Errors={len(result['errors'])}[/bold green]")
+                    else:
+                        print(f"\nRole '{keyword}' complete: Applied={len(result['applied'])}, Skipped={len(result['skipped'])}, Errors={len(result['errors'])}")
+
+                    # Small delay between roles
+                    page.wait_for_timeout(2000)
+
             finally:
-                await browser.close()
-        
+                browser.close()
+                self._playwright = None
+                self._browser = None
+                self._context = None
+
         # Stop UI and show final summary
         if self.ui:
             self.ui.stop()
@@ -2116,7 +2104,7 @@ class JobApplier:
             self.collector.print_table()
         
         filepath = self.collector.save()
-        
+
         # Save manual apply Excel
         if self.manual_collector.jobs_data:
             if self.ui:
@@ -2125,7 +2113,7 @@ class JobApplier:
             else:
                 self.manual_collector.print_table()
             self.manual_collector.save_excel()
-        
+
         return {
             "applied": all_applied,
             "skipped": all_skipped,
@@ -2135,13 +2123,12 @@ class JobApplier:
 
 
 def main():
-    import asyncio
     from src.search import JobSearch
-    
+
     ui = create_ui()
     applier = JobApplier(ui=ui, max_parallel=3)
-    result = asyncio.run(applier.run(max_jobs_per_role=10))
-    
+    result = applier.run(max_jobs_per_role=10)
+
     # Final summary is now printed by UI
 
 
