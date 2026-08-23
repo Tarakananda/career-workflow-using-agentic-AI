@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
 Chatbot Answerer for Naukri Job Application
-Uses skill inventory from resume to intelligently answer chatbot questions.
+Uses rule-based logic to answer chatbot questions.
 Handles text inputs, radio buttons, and Continue button logic.
 """
 import re
 import time
+import json
 from typing import Optional, Dict, List, Any
 from playwright.sync_api import Page, ElementHandle
 
 from src.llm_extractor import LLMSkillExtractor
-
 
 # Try to import rapidfuzz
 try:
@@ -27,16 +27,56 @@ class ChatbotAnswerer:
         profile_qa: Dict[str, str],
         profile: Dict[str, Any],
         api_key: Optional[str] = None,
-        ui: Optional[Any] = None
+        ui: Optional[Any] = None,
+        experience_map: Optional[Dict[str, str]] = None
     ):
         self.skill_inventory = {k.lower(): v for k, v in skill_inventory.items()}
         self.profile_qa = profile_qa
         self.profile = profile
         self.llm_extractor = LLMSkillExtractor(api_key=api_key)
         self.ui = ui
+        self.experience_map = experience_map or {}
 
         # Default years for known skills
         self.default_years = "3 years"
+
+        # Also include optimized skills from profile
+        opt_skills = profile.get("optimized_skills", [])
+        if isinstance(opt_skills, list):
+            self.optimized_skills = {k.lower(): "3 years" for k in opt_skills}
+        else:
+            self.optimized_skills = {k.lower(): v for k, v in opt_skills.items()}
+
+        # Common question patterns and their answers
+        self.common_patterns = {
+            "notice period": lambda: f"{profile.get('notice_period_months', 3)} months",
+            "current ctc": lambda: f"{profile.get('current_ctc_lpa', 12)} LPA",
+            "expected ctc": lambda: f"{profile.get('expected_ctc_lpa', 12)} LPA",
+            "current salary": lambda: f"{profile.get('current_ctc_lpa', 12)} LPA",
+            "expected salary": lambda: f"{profile.get('expected_ctc_lpa', 12)} LPA",
+            "total experience": lambda: self.default_years,
+            "years of experience": lambda: self.default_years,
+            "experience": lambda: self.default_years,  # Generic experience question -> 3 years
+            "current company": lambda: profile.get("current_company", ""),
+            "current employer": lambda: profile.get("current_company", ""),
+        }
+
+        # Default years for known skills
+        self.default_years = "3 years"
+
+        # Also include optimized skills from profile
+        opt_skills = profile.get("optimized_skills", [])
+        if isinstance(opt_skills, list):
+            self.optimized_skills = {k.lower(): "3 years" for k in opt_skills}
+        else:
+            self.optimized_skills = {k.lower(): v for k, v in opt_skills.items()}
+
+        # Also include optimized skills from profile
+        opt_skills = profile.get("optimized_skills", [])
+        if isinstance(opt_skills, list):
+            self.optimized_skills = {k.lower(): "3 years" for k in opt_skills}
+        else:
+            self.optimized_skills = {k.lower(): v for k, v in opt_skills.items()}
 
         # Also include optimized skills from profile
         opt_skills = profile.get("optimized_skills", [])
@@ -59,6 +99,16 @@ class ChatbotAnswerer:
             "current employer": lambda: profile.get("current_company", ""),
         }
 
+        # Default years for known skills
+        self.default_years = "3 years"
+
+        # Also include optimized skills from profile
+        opt_skills = profile.get("optimized_skills", [])
+        if isinstance(opt_skills, list):
+            self.optimized_skills = {k.lower(): "3 years" for k in opt_skills}
+        else:
+            self.optimized_skills = {k.lower(): v for k, v in opt_skills.items()}
+
     def _debug(self, msg: str) -> None:
         """Print debug message only when UI is not active (console mode)."""
         if self.ui is None:
@@ -76,12 +126,12 @@ class ChatbotAnswerer:
         Returns True if answered successfully.
         """
         self._debug(f"  [Chatbot] Question: {question[:100]}")
+        
         # 1. Check profile Q&A first (exact match)
         if self._try_profile_qa(question, chatbot_container):
             return True
 
         # 2. DETECT YES/NO QUESTIONS - Check for Yes/No radio buttons FIRST
-        # This avoids misclassifying text input questions that contain "yes"/"no" in text
         radios = chatbot_container.query_selector_all("input[type='radio']")
         is_yes_no = False
         yes_no_radios = []
@@ -92,10 +142,7 @@ class ChatbotAnswerer:
                     yes_no_radios.append(radio)
 
         # Only classify as Yes/No question if we found actual Yes/No radio buttons
-        # AND the question text suggests a Yes/No answer is expected
         q_lower = question.lower().strip()
-        has_yes_no_keywords = any(kw in q_lower for kw in ['yes', 'no', 'true', 'false'])
-        # Check if question is asking for a yes/no answer (not a text input)
         is_text_input_question = any(kw in q_lower for kw in [
             'write', 'enter', 'type', 'mention', 'specify', 'provide', 'fill', 'na', 'n/a',
             'how many', 'how much', 'what is', 'what are', 'which', 'when', 'where', 'who',
@@ -103,30 +150,34 @@ class ChatbotAnswerer:
             'experience', 'years', 'rate', 'score', 'percentage', 'percent', 'count', 'number'
         ])
 
-        # If we have actual Yes/No radio buttons, prioritize that over text-input keyword detection
-        # The presence of Yes/No radio buttons is a stronger signal than text content
+        # If we have actual Yes/No radio buttons, prioritize that
         is_yes_no = len(yes_no_radios) > 0
 
         self._debug(f"  [Chatbot] Debug: yes_no_radios={len(yes_no_radios)}, is_text_input={is_text_input_question}, is_yes_no={is_yes_no}, q_lower={q_lower[:100]}")
         if is_yes_no:
             q_lower = question.lower().strip()
-            # Determine answer based on question context
+            # Fallback to rule-based
             if "counter offer" in q_lower:
                 answer = "No"
             elif "relocate" in q_lower or "willing to relocate" in q_lower or "residing" in q_lower:
                 answer = "Yes"
             elif "join within" in q_lower or "notice" in q_lower:
-                answer = "No"  # Can't join within 30 days if 3 months notice
+                answer = "No"
             elif "manual testing" in q_lower or "automation testing" in q_lower:
-                answer = "No"  # Don't have manual testing experience
+                answer = "No"
+            elif "available for" in q_lower and ("interview" in q_lower or "virtual" in q_lower):
+                answer = "Yes"
+            elif "available" in q_lower and "interview" in q_lower:
+                answer = "Yes"
+            elif "virtual interview" in q_lower:
+                answer = "Yes"
             else:
-                answer = "No"  # Default to No
+                answer = "No"
 
             self._debug(f"  [Chatbot] Yes/No question detected, answering: {answer}")
             return self._fill_answer(chatbot_container, answer, question, page)
 
         # 2b. HANDLE TEXT INPUT QUESTIONS
-        # Questions asking to "write NA", "write NA if not", "enter NA", etc.
         q_lower = question.lower().strip()
         is_text_input_question = any(kw in q_lower for kw in [
             'write na', 'write n/a', 'enter na', 'enter n/a', 'type na', 'type n/a',
@@ -137,7 +188,6 @@ class ChatbotAnswerer:
 
         if is_text_input_question:
             # Default answer for "write NA" type questions is "NA"
-            # Try different formats that might be accepted
             if "n/a" in q_lower or "n / a" in q_lower:
                 answer = "N/A"
             else:
@@ -163,7 +213,7 @@ class ChatbotAnswerer:
             self._debug(f"  [Chatbot] Text input question detected (write NA), attempt {attempt}, answering: {answer}")
             return self._fill_answer(chatbot_container, answer, question, page)
 
-        # 3. Extract skill from question and lookup in inventory
+        # 3. Extract skill from question and lookup in inventory (fallback)
         skill = self._extract_skill_from_question(question)
         if skill:
             if self._try_skill_answer(skill, question, chatbot_container, page):
@@ -275,7 +325,7 @@ class ChatbotAnswerer:
                 # Use fuzzy matching for better coverage
                 if RAPIDFUZZ_AVAILABLE:
                     if fuzz.ratio(stored_clean, q_lower) > 80:
-                        return self._fill_answer(chatbot_container, answer)
+                        return self._fill_answer(chatbot_container, answer, question, None)
 
         return False
 
@@ -431,7 +481,8 @@ def create_chatbot_answerer(
     profile_qa: Dict[str, str],
     profile: Dict[str, Any],
     api_key: Optional[str] = None,
-    ui: Optional[Any] = None
+    ui: Optional[Any] = None,
+    experience_map: Optional[Dict[str, str]] = None
 ) -> ChatbotAnswerer:
     """Factory function to create ChatbotAnswerer."""
-    return ChatbotAnswerer(skill_inventory, profile_qa, profile, api_key, ui)
+    return ChatbotAnswerer(skill_inventory, profile_qa, profile, api_key, ui, experience_map)

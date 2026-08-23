@@ -8,7 +8,7 @@ import os
 from playwright_stealth.stealth import Stealth
 from playwright.sync_api import sync_playwright
 
-from src.matcher_v2 import should_apply, is_recent_job, extract_skills_from_text
+from src.matcher_v2 import is_recent_job, extract_skills_from_text
 from src.resume import parse_resume, Resume
 from src.data_collector import JobDataCollector, ManualApplyCollector
 from src.ui import LiveJobTable, JobRow, JobStatus, create_ui
@@ -63,12 +63,16 @@ class JobApplier:
         print("  Initializing LLM skill extractor...")
         self.skill_inventory = self._build_skill_inventory()
         
+        # Build experience map for chatbot
+        self.experience_map = self._build_experience_map()
+        
         self.chatbot_answerer = create_chatbot_answerer(
             skill_inventory=self.skill_inventory,
             profile_qa=self.profile_qa,
             profile=self.profile,
             api_key=self.openai_api_key,
-            ui=self.ui
+            ui=self.ui,
+            experience_map=self.experience_map
         )
         
         # Chatbot debug flag
@@ -1753,16 +1757,38 @@ class JobApplier:
                     # Check location match (preferred locations only)
                     location_match = self._check_location_match(job_details["location"])
                     
-                    # SKILL MATCHING: Based ONLY on must-have + good-to-have skills
+                    # SKILL MATCHING: Based ONLY on must-have + good-to-have skills from JD
                     resume_skills = self.profile.get("optimized_skills", self.resume.skills)
-                    should, match_pct, matched, missing = should_apply(
-                        resume_skills, job_details["jd_text"], self.match_threshold
-                    )
                     
-                    # Categorize matched skills into must-have vs good-to-have
+                    # Extract must-have and good-to-have skills from JD
+                    jd_skills = extract_skills_from_text(job_details["jd_text"])
                     from src.matcher_v2 import SKILL_CATEGORIES
-                    must_have = [s for s in matched if any(s in cat.skills for cat in SKILL_CATEGORIES if cat.required)]
-                    good_to_have = [s for s in matched if any(s in cat.skills for cat in SKILL_CATEGORIES if not cat.required)]
+                    jd_must_have = [s for s in jd_skills if any(s in cat.skills for cat in SKILL_CATEGORIES if cat.required)]
+                    jd_good_to_have = [s for s in jd_skills if any(s in cat.skills for cat in SKILL_CATEGORIES if not cat.required)]
+                    
+                    # Calculate match percentage based ONLY on must-have + good-to-have skills
+                    all_jd_skills = set(jd_must_have + jd_good_to_have)
+                    resume_set = set(resume_skills)
+                    
+                    matched_must = resume_set & set(jd_must_have)
+                    matched_good = resume_set & set(jd_good_to_have)
+                    missing_must = set(jd_must_have) - resume_set
+                    missing_good = set(jd_good_to_have) - resume_set
+                    
+                    total_required = len(jd_must_have) + len(jd_good_to_have)
+                    total_matched = len(matched_must) + len(matched_good)
+                    
+                    # Must have 100% of must-have skills, 80% overall
+                    must_have_pct = (len(matched_must) / len(jd_must_have) * 100) if jd_must_have else 100
+                    overall_pct = (total_matched / total_required * 100) if total_required > 0 else 100
+                    
+                    should = (must_have_pct >= 100 and overall_pct >= 80) if jd_must_have else (overall_pct >= 80)
+                    match_pct = overall_pct
+                    
+                    matched = list(matched_must) + list(matched_good)
+                    missing = list(missing_must) + list(missing_good)
+                    must_have = list(matched_must)
+                    good_to_have = list(matched_good)
                     
                     # Update job_data with skill info
                     job_data["must_have_skills"] = must_have

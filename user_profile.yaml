@@ -1,4 +1,4 @@
-apply_threshold: 0.4
+apply_threshold: 0.8
 auto_apply_enabled: true
 check_all_jobs: false
 current_ctc_lpa: 6.0
@@ -18,8 +18,6 @@ notice_period_months: 3
 openai_api_key: ''
 optimized_skills:
 - python
-- go
-- golang
 - bash
 - shell
 - powershell
@@ -30,11 +28,9 @@ optimized_skills:
 - k8s
 - eks
 - aks
-- gke
 - helm
 - helmfile
 - terraform
-- terragrunt
 - cloudformation
 - ansible
 - jenkins
@@ -44,28 +40,22 @@ optimized_skills:
 - ci/cd
 - cicd
 - argocd
-- flux
-- flux v2
 - gitops
 - prometheus
 - grafana
 - alertmanager
-- datadog
 - cloudwatch
 - trivy
 - sonarqube
-- vault
 - hashicorp vault
 - aws secrets manager
 - azure key vault
-- istio
 - ec2
 - s3
 - rds
 - vpc
 - lambda
 - ecs
-- fargate
 - rds
 - dynamodb
 - elasticache
@@ -140,6 +130,37 @@ questions:
   question: How many years of experience do you have in Generative Ai?
 - answer: '3'
   question: Cloud Trainer AWS or Azure Corporate Training Role
+- answer: ''
+  question: Excellent opportunity For AWS Cloud Monitoring Professionals
+- answer: ''
+  question: 'How many years of experience do you have in Generative Ai?
+
+    3 years'
+- answer: '333'
+  question: How many years of experience do you have in
+- answer: ''
+  question: 'Will you attend the walk-in?
+
+    Yes, I will attend
+
+
+    No, I will not attend'
+- answer: ''
+  question: 'Net Core?
+
+    0
+
+    How many years of experience do you have in REST API?
+
+    0
+
+    How many years of experience do you have in Web Services?
+
+    3
+
+    Thank you for your responses'
+- answer: ''
+  question: AWS Bedrock
 reject_keywords:
 - Python Developer
 - Java Developer
