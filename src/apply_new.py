@@ -10,8 +10,7 @@ import os
 from playwright_stealth import Stealth
 from playwright.async_api import async_playwright
 
-from src.matcher_improved import should_apply_improved as should_apply
-from src.matcher_v2 import is_recent_job, extract_skills_from_text
+from src.matcher_v2 import should_apply, is_recent_job, extract_skills_from_text
 from src.resume import parse_resume, Resume
 from src.data_collector import JobDataCollector, ManualApplyCollector
 from src.ui import LiveJobTable, JobRow, JobStatus, create_ui
@@ -36,7 +35,7 @@ class JobApplier:
 
         # Use profile's apply_threshold if not explicitly provided
         if match_threshold is None:
-            match_threshold = self.profile.get("apply_threshold", 0.8) * 100
+            match_threshold = self.profile.get("apply_threshold", 0.75) * 100
         self.match_threshold = match_threshold
         
         # Read new config options from profile
@@ -51,11 +50,6 @@ class JobApplier:
         # LLM config
         self.llm_model = self.profile.get("llm_model", "gpt-4o-mini")
         self.openai_api_key = self.profile.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
-        
-        # Use profile's min_skill_match if not explicitly provided
-        if match_threshold is None:
-            match_threshold = self.profile.get("min_skill_match", 80)
-        self.match_threshold = match_threshold
         
         self.collector = JobDataCollector()
         self.manual_collector = ManualApplyCollector()
@@ -757,6 +751,12 @@ class JobApplier:
         # Extract location from JD if not in job_data
         location = self._extract_location_from_jd(job_data.get("jd_text", ""))
         
+        # Extract must-have and good-to-have skills from JD
+        from src.matcher_v2 import SKILL_CATEGORIES, extract_skills_from_text
+        jd_skills = extract_skills_from_text(job_data.get("jd_text", ""))
+        must_have = [s for s in jd_skills if any(s in cat.skills for cat in SKILL_CATEGORIES if cat.required)]
+        good_to_have = [s for s in jd_skills if any(s in cat.skills for cat in SKILL_CATEGORIES if not cat.required)]
+        
         manual_record = {
             "role": job_data["role"],
             "title": job_data["title"],
@@ -767,6 +767,8 @@ class JobApplier:
             "match_percentage": job_data["match_percentage"],
             "matched_skills": ", ".join(job_data["matched_skills"]),
             "missing_skills": ", ".join(job_data["missing_skills"]),
+            "must_have_skills": must_have,
+            "good_to_have_skills": good_to_have,
             "naukri_url": job_data["url"],
             "company_site_url": page.url,
             "status": "manual_apply_needed",
@@ -1470,7 +1472,7 @@ class JobApplier:
         else:
             print("  Location filters failed after retries")
 
-    async def process_role(self, page: Any, keyword: str, max_jobs: int, context: Any) -> dict:
+    async def process_role(self, page: Any, keyword: str, max_jobs: int, context: Any, global_job_counter: int = 0) -> dict:
         """Process a single role: search, filter, check each job, apply if match."""
         base_url = f"https://www.naukri.com/{keyword.lower().replace(' ', '-').replace('&', '')}-jobs"
         search_url = f"{base_url}?experience=3"
@@ -1537,7 +1539,7 @@ class JobApplier:
         
 # Use parallel processing if max_parallel > 1
         if self.max_parallel > 1:
-            return await self._process_role_parallel(page, keyword, max_jobs, context, cards, total_cards)
+            return await self._process_role_parallel(page, keyword, max_jobs, context, cards, total_cards, global_job_counter)
         
         card_index = 0
         while processed < max_jobs and card_index < len(cards):
@@ -1677,7 +1679,12 @@ class JobApplier:
                     # Get salary and location from card
                     salary = await self.get_salary_from_card(card)
                     location = await self.get_location_from_card(card)
-                    
+
+                    # Categorize matched skills as must-have vs good-to-have
+                    from src.matcher_v2 import SKILL_CATEGORIES
+                    matched_must = [s for s in matched if any(s in cat.skills for cat in SKILL_CATEGORIES if cat.required)]
+                    matched_good = [s for s in matched if any(s in cat.skills for cat in SKILL_CATEGORIES if not cat.required)]
+
                     # Collect job data for output file
                     job_data = {
                         "role": keyword,
@@ -1693,15 +1700,17 @@ class JobApplier:
                         "resume_skills": resume_skills,
                         "matched_skills": matched,
                         "missing_skills": missing,
+                        "must_have_skills": matched_must,
+                        "good_to_have_skills": matched_good,
                         "match_percentage": round(match_pct, 1),
                         "applied": False,
                         "status": "skipped" if not should else "applied",
                         "error": None
                     }
-                    
+
                     if should:
                         if self.ui:
-                            self.ui.update_job(card_index, salary=salary, location=location, status=JobStatus.APPLYING)
+                            self.ui.update_job(card_index, salary=salary, location=location, status=JobStatus.APPLYING, must_have_skills=matched_must, good_to_have_skills=matched_good)
                         else:
                             print(f"      ✓ Match > {self.match_threshold}%, applying...")
                             # Wait for apply button to be ready - use loop with query_selector
@@ -1839,7 +1848,7 @@ class JobApplier:
 
         return {"applied": applied, "skipped": skipped, "errors": errors}
 
-    async def _process_role_parallel(self, page: Any, keyword: str, max_jobs: int, context: Any, cards: list, total_cards: int) -> dict:
+    async def _process_role_parallel(self, page: Any, keyword: str, max_jobs: int, context: Any, cards: list, total_cards: int, global_job_counter: int = 0) -> dict:
         """Process jobs in parallel using asyncio + semaphore."""
         semaphore = asyncio.Semaphore(self.max_parallel)
         applied = []
@@ -2069,6 +2078,8 @@ class JobApplier:
             browser = await p.chromium.launch(headless=self.headless_mode)
             
             try:
+                                # Global job counter for unique job IDs across all roles
+                global_job_counter = 0
                 for keyword in keywords:
                     # Create fresh context and page for each role to avoid state leakage
                     context = await browser.new_context()
@@ -2089,7 +2100,7 @@ class JobApplier:
                     page.set_default_navigation_timeout(90000)
                     
                     try:
-                        result = await self.process_role(page, keyword, max_jobs_per_role, context)
+                        result = await self.process_role(page, keyword, max_jobs_per_role, context, global_job_counter)
                         all_applied.extend(result["applied"])
                         all_skipped.extend(result["skipped"])
                         all_errors.extend(result["errors"])

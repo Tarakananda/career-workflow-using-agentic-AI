@@ -1,0 +1,22 @@
+{
+  "date": "2026-08-23T07:10:17.175588",
+  "day": "day_20260823",
+  "total_jobs": 1,
+  "jobs": [
+    {
+      "title": "Test Job",
+      "company": "Test Corp",
+      "location": "Bengaluru",
+      "experience": "3-5 Yrs",
+      "must_have_skills": [
+        "aws",
+        "kubernetes"
+      ],
+      "good_to_have_skills": [
+        "python",
+        "go"
+      ],
+      "status": "skipped"
+    }
+  ]
+}

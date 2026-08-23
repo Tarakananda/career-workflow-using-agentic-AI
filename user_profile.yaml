@@ -1,6 +1,6 @@
-apply_threshold: 0.75
+apply_threshold: 0.4
 auto_apply_enabled: true
-check_all_jobs: true
+check_all_jobs: false
 current_ctc_lpa: 6.0
 expected_ctc_lpa: 12.0
 headless_mode: false
@@ -106,16 +106,16 @@ preferred_locations:
 - Bengaluru
 - Hyderabad
 questions:
-- answer: ''
+- answer: 'No'
   question: 'Are you holding any counter offer ?
 
     Yes
 
 
     No'
-- answer: ''
+- answer: 'Yes'
   question: Junior AWS Python
-- answer: ''
+- answer: 'Yes'
   question: 'Do you have hands-on experience in both Manual Testing and Automation
     Testing?
 
@@ -123,9 +123,23 @@ questions:
 
 
     No'
-- answer: ''
+- answer: NA
   question: Are you ex-infosys employee ?if yes mention your infosys employee id if
     not, write NA
+- answer: ''
+  question: 'Are you currently residing in Gurugram, Haryana or willing to relocate
+    to Gurugram, Haryana?
+
+    Yes
+
+
+    No'
+- answer: '3'
+  question: How many years of experience do you have in Backend Development?
+- answer: '3'
+  question: How many years of experience do you have in Generative Ai?
+- answer: '3'
+  question: Cloud Trainer AWS or Azure Corporate Training Role
 reject_keywords:
 - Python Developer
 - Java Developer
@@ -155,17 +169,9 @@ strict_roles:
 - AWS DevOps Engineer
 - Azure DevOps Engineer
 - DevOps Engineer
-- AWS Cloud Engineer
-- Azure Cloud Engineer
-- Kubernetes Administrator
 - Site Reliability Engineer
 - SRE
 - Platform Engineer
 - Cloud Engineer
 - Infrastructure Engineer
-- AWS Architect
-- Azure Architect
-- Cloud Architect
-- DevSecOps Engineer
-- Kubernetes Engineer
-- Container Platform Engineer
+- Kubernetes Administrator

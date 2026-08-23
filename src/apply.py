@@ -23,7 +23,7 @@ class JobApplier:
         self.resume: Resume = parse_resume(resume_file)
 
         if match_threshold is None:
-            match_threshold = self.profile.get("apply_threshold", 0.8) * 100
+            match_threshold = self.profile.get("apply_threshold", 0.75) * 100
         self.match_threshold = match_threshold
         self.max_days_old = max_days_old
         self.collector = JobDataCollector()

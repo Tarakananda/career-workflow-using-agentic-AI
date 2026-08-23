@@ -65,19 +65,55 @@ class JobSearch:
         return jobs
 
     async def _sort_by_date(self, page: Any) -> None:
-        max_retries = 2
+        max_retries = 3
         for attempt in range(max_retries):
             try:
-                await page.wait_for_selector("#filter-sort", timeout=20000)
+                await page.wait_for_selector("#filter-sort", timeout=30000)
                 sort_btn = await page.query_selector("#filter-sort")
                 if sort_btn and await sort_btn.is_visible():
                     await sort_btn.click()
-                    await page.wait_for_timeout(2000)
-                    date_option = await page.query_selector("[data-filter-id='sort'] a[data-id='filter-sort-f']")
+                    await page.wait_for_timeout(3000)
+                    
+                    # Multiple strategies to find the Date option
+                    date_option = None
+                    
+                    # Strategy 1: data-filter-id with text
+                    date_option = await page.query_selector("[data-filter-id='sort'] a:has-text('Date'), [data-filter-id='sort'] li:has-text('Date')")
+                    
+                    # Strategy 2: data-id attribute
+                    if not date_option:
+                        date_option = await page.query_selector("a[data-id='filter-sort-f']")
+                    
+                    # Strategy 3: any element within dropdown with "Date" text
+                    if not date_option:
+                        date_option = await page.query_selector("[data-filter-id='sort'] *:has-text('Date')")
+                    
+                    # Strategy 4: broader search - any visible element with "Date" in sort dropdown area
+                    if not date_option:
+                        # Try clicking the sort button again to reopen dropdown
+                        await sort_btn.click()
+                        await page.wait_for_timeout(2000)
+                        date_option = await page.query_selector(":has-text('Date'):visible")
+                    
                     if date_option and await date_option.is_visible():
                         await date_option.click()
-                        await page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=20000)
-                        print("  Sorted by date")
+                        await page.wait_for_selector("[data-job-id], .jobTuple, .job-card", timeout=30000)
+                        
+                        # VERIFY sort worked by checking first job date
+                        await page.wait_for_timeout(3000)
+                        first_card = await page.query_selector("[data-job-id], .jobTuple, .job-card")
+                        if first_card:
+                            posted_elem = await first_card.query_selector(".job-post-day, [class*='post-day'], [class*='posted']")
+                            if posted_elem:
+                                posted_text = (await posted_elem.inner_text()).strip().lower()
+                                print(f"  First job posted: {posted_text}")
+                                if any(kw in posted_text for kw in ['just now', 'hour', 'hr', 'today', 'min', 'sec']):
+                                    print("  ✓ Sort by date verified - showing recent jobs")
+                                    return
+                                else:
+                                    print(f"  ⚠ Sort may not have worked - first job: {posted_text}")
+                        
+                        print("  Sorted by date (verification skipped)")
                         return
                     else:
                         print("  Date option not found")
@@ -86,7 +122,7 @@ class JobSearch:
             except Exception as e:
                 print(f"  Sort by date attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    await page.wait_for_timeout(2000)
+                    await page.wait_for_timeout(5000)
         print("  Sort by date failed after retries")
 
     async def _apply_filters(self, page: Any, salary_min: int, salary_max: int, job_types: list[str]) -> None:

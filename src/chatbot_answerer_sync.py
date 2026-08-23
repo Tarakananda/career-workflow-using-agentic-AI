@@ -51,9 +51,10 @@ class ChatbotAnswerer:
             "current ctc": lambda: f"{profile.get('current_ctc_lpa', 12)} LPA",
             "expected ctc": lambda: f"{profile.get('expected_ctc_lpa', 12)} LPA",
             "current salary": lambda: f"{profile.get('current_ctc_lpa', 12)} LPA",
-            "expected salary": lambda: f"{profile.get('expected_ctc_lpa', 12)} LPA",
+            "expected salary": lambda: f"{profile.get('current_ctc_lpa', 12)} LPA",
             "total experience": lambda: self.default_years,
             "years of experience": lambda: self.default_years,
+            "experience": lambda: self.default_years,  # Generic experience question -> 3 years
             "current company": lambda: profile.get("current_company", ""),
             "current employer": lambda: profile.get("current_company", ""),
         }
@@ -102,7 +103,9 @@ class ChatbotAnswerer:
             'experience', 'years', 'rate', 'score', 'percentage', 'percent', 'count', 'number'
         ])
 
-        is_yes_no = len(yes_no_radios) > 0 and not is_text_input_question
+        # If we have actual Yes/No radio buttons, prioritize that over text-input keyword detection
+        # The presence of Yes/No radio buttons is a stronger signal than text content
+        is_yes_no = len(yes_no_radios) > 0
 
         self._debug(f"  [Chatbot] Debug: yes_no_radios={len(yes_no_radios)}, is_text_input={is_text_input_question}, is_yes_no={is_yes_no}, q_lower={q_lower[:100]}")
         if is_yes_no:
@@ -163,7 +166,7 @@ class ChatbotAnswerer:
         # 3. Extract skill from question and lookup in inventory
         skill = self._extract_skill_from_question(question)
         if skill:
-            if self._try_skill_answer(skill, question, chatbot_container):
+            if self._try_skill_answer(skill, question, chatbot_container, page):
                 return True
             # Unknown skill -> answer "0 years"
             if self._fill_answer(chatbot_container, "0 years", question, page):
@@ -284,7 +287,8 @@ class ChatbotAnswerer:
         self,
         skill: str,
         question: str,
-        chatbot_container: ElementHandle
+        chatbot_container: ElementHandle,
+        page: Page
     ) -> bool:
         """Try to answer using skill inventory.
 
@@ -372,7 +376,12 @@ class ChatbotAnswerer:
                 if radio.is_visible():
                     label = self._get_radio_label(radio, chatbot_container)
                     if label and label.lower() == answer.lower():
-                        radio.click()
+                        # Use JavaScript click to avoid viewport issues
+                        try:
+                            radio.evaluate("el => el.click()")
+                        except Exception:
+                            radio.scroll_into_view_if_needed()
+                            radio.click()
                         self._debug(f"  [Chatbot] Selected radio: {label}")
                         return True
 

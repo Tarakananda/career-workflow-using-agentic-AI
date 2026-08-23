@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 import json
 from datetime import datetime
+from datetime import date
 
 try:
     import pandas as pd
@@ -29,25 +30,49 @@ class JobDataCollector:
         next_day = max(existing_days) + 1 if existing_days else 1
         return f"day_{next_day}.json"
 
+    def get_today_filename(self) -> str:
+        """Get today's filename (day_<date>.json) to append to same file within a day."""
+        today_str = date.today().strftime("%Y%m%d")
+        return f"day_{today_str}.json"
+
     def add_job(self, job_data: dict[str, Any]) -> None:
         """Add job data to collection."""
         self.jobs_data.append(job_data)
 
+    def load_existing_today(self) -> list:
+        """Load existing jobs from today's file."""
+        today_file = self.output_dir / self.get_today_filename()
+        if today_file.exists():
+            try:
+                with open(today_file, 'r') as f:
+                    data = json.load(f)
+                    return data.get('jobs', [])
+            except Exception:
+                return []
+        return []
+
     def save(self) -> Path:
-        """Save collected jobs to file."""
-        filename = self.get_day_filename()
-        filepath = self.output_dir / filename
+        """Save collected jobs to today's file, appending to existing."""
+        today_file = self.output_dir / self.get_today_filename()
+        
+        # Load existing jobs from today
+        existing_jobs = self.load_existing_today()
+        
+        # Combine with new jobs (avoid duplicates by URL)
+        existing_urls = {job.get('url') for job in existing_jobs}
+        new_jobs = [job for job in self.jobs_data if job.get('url') not in existing_urls]
+        all_jobs = existing_jobs + new_jobs
         
         output = {
             "date": datetime.now().isoformat(),
-            "day": filename.replace(".json", ""),
-            "total_jobs": len(self.jobs_data),
-            "jobs": self.jobs_data
+            "day": today_file.stem,
+            "total_jobs": len(all_jobs),
+            "jobs": all_jobs
         }
         
-        filepath.write_text(json.dumps(output, indent=2, ensure_ascii=False))
-        print(f"Saved {len(self.jobs_data)} jobs to {filepath}")
-        return filepath
+        today_file.write_text(json.dumps(output, indent=2, ensure_ascii=False))
+        print(f"Saved {len(new_jobs)} new jobs (total: {len(all_jobs)}) to {today_file}")
+        return today_file
 
     def print_table(self) -> None:
         """Print jobs in table format with auto-adjusting columns."""
@@ -62,10 +87,11 @@ class JobDataCollector:
         # Column definitions with min/max widths
         columns = [
             ("Title", 20, 35),
+            ("Company", 15, 25),
             ("Location", 12, 22),
-            ("Salary", 10, 16),
             ("Exp", 7, 10),
-            ("Missing Skills", 18, 30),
+            ("Must Have Skills", 20, 35),
+            ("Good to Have Skills", 20, 35),
             ("Status", 10, 12),
         ]
         
@@ -95,11 +121,11 @@ class JobDataCollector:
         # Rows
         for job in self.jobs_data:
             title = job.get('title', 'N/A')[:widths[0]-1]
-            location = job.get('location', 'N/A')[:widths[1]-1]
-            salary = job.get('salary', 'N/A')[:widths[2]-1]
+            company = job.get('company', 'N/A')[:widths[1]-1]
+            location = job.get('location', 'N/A')[:widths[2]-1]
             exp = job.get('experience', 'N/A')[:widths[3]-1]
-            missing = ', '.join(job.get('missing_skills', [])[:3])[:widths[4]-1]
-            applied = job.get('applied', False)
+            must_have = ', '.join(job.get('must_have_skills', [])[:3])[:widths[4]-1]
+            good_to_have = ', '.join(job.get('good_to_have_skills', [])[:3])[:widths[5]-1]
             status = job.get('status', 'skipped')
             
             if status == 'applied' or status == 'company_site':
@@ -111,9 +137,9 @@ class JobDataCollector:
             else:
                 status_str = "✗ Skipped"
             
-            status_str = status_str[:widths[5]-1]
+            status_str = status_str[:widths[6]-1]
             
-            print(fmt.format(title, location, salary, exp, missing, status_str))
+            print(fmt.format(title, company, location, exp, must_have, good_to_have, status_str))
 
     def clear(self) -> None:
         """Clear collected data."""
